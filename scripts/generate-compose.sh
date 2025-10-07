@@ -4,7 +4,7 @@ source /scripts/functions.sh
 gen-dstack-mesh() {
   if [ "${DSTACK_VPC_SERVER_ENABLED}" == "true" ]; then
     DSTACK_VPC_SERVER_API="dstack-vpc-api-server:8000"
-    DSTACK_VPC_SERVER_NAME="dstack-vpc-server"
+    DSTACK_VPC_SERVER_NAME="vpc-server"
   else
     DSTACK_VPC_SERVER_API=""
     DSTACK_VPC_SERVER_NAME=""
@@ -67,7 +67,7 @@ gen-vpc-server() {
       - vpc_api_server_data:/data
     command: /scripts/vpc-server-entry.sh
     depends_on:
-      - dstack-vpc-server
+      - vpc-server
     networks:
       - project
 EOF

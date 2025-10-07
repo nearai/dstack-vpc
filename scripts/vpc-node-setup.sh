@@ -19,7 +19,7 @@ fi
 echo "Instance ID: $INSTANCE_ID"
 echo "VPC Server App ID: $VPC_SERVER_APP_ID"
 
-RESPONSE=$(curl -s -H "x-dstack-target-app: $VPC_SERVER_APP_ID" -H "Host: dstack-vpc-server" \
+RESPONSE=$(curl -s -H "x-dstack-target-app: $VPC_SERVER_APP_ID" -H "Host: vpc-server" \
     "$DSTACK_MESH_URL/api/register?instance_id=$INSTANCE_ID&node_name=$NODE_NAME")
 
 PRE_AUTH_KEY=$(jq -r .pre_auth_key <<<"$RESPONSE")

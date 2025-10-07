@@ -2,7 +2,7 @@
 MESH_CONTAINER_NAME="dstack-service-mesh"
 VPC_CLIENT_CONTAINER_NAME="dstack-vpc-client"
 VPC_API_SERVER_CONTAINER_NAME="dstack-vpc-api-server"
-VPC_SERVER_CONTAINER_NAME="dstack-vpc-server"
+VPC_SERVER_CONTAINER_NAME="vpc-server"
 
 HEALTHCHECK_SCRIPT="/var/run/dstack-healthcheck.sh"
 

@@ -15,7 +15,7 @@ ensure_env_exists() {
 ensure_env_exists "DSTACK_MESH_CONTAINER_NAME"
 ensure_env_exists "VPC_SERVER_CONTAINER_NAME"
 
-HS="${VPC_SERVER_CONTAINER_NAME:-dstack-vpc-server}"
+HS="${VPC_SERVER_CONTAINER_NAME:-vpc-server}"
 
 echo "Waiting for headscale to be ready..."
 until docker exec $HS headscale users list >/dev/null 2>&1; do
