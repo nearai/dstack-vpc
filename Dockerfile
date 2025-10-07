@@ -6,7 +6,7 @@ COPY service-mesh/ /build/service-mesh/
 WORKDIR /build/service-mesh
 RUN cargo build --release --target x86_64-unknown-linux-musl
 
-FROM golang:1.21-alpine AS go-builder
+FROM golang:1.23-alpine AS go-builder
 WORKDIR /build
 COPY vpc-api-server/ /build/
 RUN go mod init vpc-api-server || true

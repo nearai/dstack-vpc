@@ -29,10 +29,20 @@ EOF
 echo "Generating server certificate using dstack.sock HTTP API..."
 CERT_URL='http://localhost/GetTlsKey?subject=localhost&usage_server_auth=true&usage_client_auth=true'
 
+echo "Requesting certificates from dstack.sock..."
+echo "Using URL: $CERT_URL"
+echo "Using container image ID: $DSTACK_CONTAINER_IMAGE_ID"
+echo "Using gateway domain: $DSTACK_GATEWAY_DOMAIN"
+
 if ! docker run --rm --name dstack-get-tls-key -v /var/run/dstack.sock:/var/run/dstack.sock $DSTACK_CONTAINER_IMAGE_ID \
     curl -s --unix-socket /var/run/dstack.sock $CERT_URL >/tmp/server_response.json;
 then
     echo "Failed to generate certificates - dstack.sock may not be available"
+    # Debug output
+    echo "Debug info - attempting to query dstack.sock directly:"
+    curl -s --unix-socket /var/run/dstack.sock http://localhost/Info
+    echo "Contents of /tmp/server_response.json:"
+    cat /tmp/server_response.json
     exit 1
 fi
 
