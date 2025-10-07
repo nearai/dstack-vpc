@@ -29,7 +29,9 @@ RUN apt-get update && apt-get install -y \
     supervisor \
     gettext-base \
     socat \
-    kmod
+    kmod \
+    etcd-server \
+    etcd-client
 
 RUN curl -fsSL https://get.docker.com | sh
 RUN usermod -aG docker root
@@ -42,7 +44,9 @@ RUN mkdir -p /var/run/dstack \
     /var/log/supervisor \
     /var/log/nginx \
     /scripts \
-    /lib/extra-modules
+    /lib/extra-modules \
+    /var/lib/etcd \
+    /etc/etcd
 
 COPY --from=rust-builder /build/service-mesh/target/x86_64-unknown-linux-musl/release/dstack-mesh /usr/local/bin/dstack-mesh
 RUN chmod +x /usr/local/bin/dstack-mesh
@@ -57,10 +61,11 @@ COPY configs/nginx-client-proxy.conf /etc/nginx/conf.d/client-proxy.conf
 COPY configs/nginx-server-proxy.conf.template /etc/nginx/templates/server-proxy.conf.template
 COPY configs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY configs/headscale_config.yaml /etc/headscale/config.yaml
+COPY configs/etcd.yaml /etc/etcd/etcd.yaml
 COPY scripts /scripts
 RUN chmod +x /scripts/*.sh
 
-EXPOSE 80 443 8091 8092
+EXPOSE 80 443 8091 8092 2379 2380
 
 HEALTHCHECK CMD /scripts/healthcheck.sh
 

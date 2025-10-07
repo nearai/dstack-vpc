@@ -1,0 +1,36 @@
+# etcd configuration for VPC Server
+name: 'vpc-etcd'
+data-dir: '/var/lib/etcd'
+
+# Client communication
+listen-client-urls: 'http://0.0.0.0:2379'
+advertise-client-urls: 'http://0.0.0.0:2379'
+
+# Peer communication (for clustering)
+listen-peer-urls: 'http://0.0.0.0:2380'
+initial-advertise-peer-urls: 'http://0.0.0.0:2380'
+
+# Cluster configuration
+initial-cluster: 'vpc-etcd=http://0.0.0.0:2380'
+initial-cluster-state: 'new'
+initial-cluster-token: 'vpc-etcd-cluster'
+
+# Enable v2 API for Patroni compatibility
+enable-v2: true
+
+# Performance tuning
+heartbeat-interval: 100
+election-timeout: 1000
+
+# Logging
+log-level: 'info'
+log-outputs: 
+  - '/var/log/etcd.log'
+  - 'stderr'
+
+# Security (disabled for now, can be enabled later)
+# client-transport-security:
+#   cert-file: '/etc/etcd/server.crt'
+#   key-file: '/etc/etcd/server.key'
+#   trusted-ca-file: '/etc/etcd/ca.crt'
+#   client-cert-auth: true
