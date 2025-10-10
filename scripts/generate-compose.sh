@@ -104,7 +104,7 @@ gen-vpc-client() {
       - /dev/net/tun:/dev/net/tun
     network_mode: host
     volumes:
-      - vpc_shared:/shared:ro
+      - vpc_shared:/shared
       - vpc_node_data:/var/lib/tailscale
       - /var/run:/var/run
       - /dstack:/dstack

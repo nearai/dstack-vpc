@@ -24,5 +24,12 @@ tailscale up \
     --reset \
     --accept-dns
 
+ACTUAL_HOSTNAME=$(tailscale status --json 2>/dev/null | jq -r ".Self.DNSName" | sed "s/\.$//")
+TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
+
+# Write to /shared
+echo "$ACTUAL_HOSTNAME" > /shared/actual_hostname
+echo "$TAILSCALE_IP" > /shared/tailscale_ip
+
 echo 'Tailscale connected successfully'
 tail -f /dev/null
