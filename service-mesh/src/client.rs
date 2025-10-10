@@ -459,6 +459,12 @@ async fn proxy_request(
         }
     }
 
+    info!(
+        "Proxying request to app_id '{}' at URL: {}",
+        target.app_id, url
+    );
+    debug!("Full request headers: {:?}", request.all_headers);
+
     // Execute request
     match request_builder.send().await {
         Ok(response) => {
