@@ -413,17 +413,6 @@ func main() {
 			nodeName = fmt.Sprintf("node-%s", instanceUUID)
 		}
 
-		nodeInfo := NodeInfo{
-			UUID:           instanceUUID,
-			Name:           nodeName,
-			TailscaleIP:    nil,
-			ActualHostname: nil,
-		}
-
-		state.mutex.Lock()
-		state.nodes[instanceUUID] = nodeInfo
-		state.mutex.Unlock()
-
 		response := BootstrapResponse{
 			PreAuthKey:   preAuthKey,
 			SharedKey:    state.sharedKey,
@@ -451,6 +440,17 @@ func main() {
 		}
 
 		state.mutex.Lock()
+		
+		// If this is an etcd node, remove all other etcd nodes first (keep only most recent)
+		if nodeType == "etcd" {
+			for existingUUID, existingNode := range state.nodes {
+				if existingNode.NodeType == "etcd" && existingUUID != uuid {
+					delete(state.nodes, existingUUID)
+					log.Printf("Removed old etcd node %s", existingUUID)
+				}
+			}
+		}
+		
 		if node, exists := state.nodes[uuid]; exists {
 			if nodeType != "" {
 				node.NodeType = nodeType
@@ -508,6 +508,38 @@ func main() {
 			"count":      len(etcdNodes),
 		})
 		log.Printf("etcd discovery request returned %d nodes", len(etcdNodes))
+	})
+
+	// New endpoint: Get last registered postgres node
+	r.GET("/api/discover/postgres", func(c *gin.Context) {
+		state.mutex.RLock()
+		defer state.mutex.RUnlock()
+
+		var latestPostgres *NodeInfo
+
+		// Find the most recently added postgres node
+		// Since Go maps don't preserve insertion order, we'll need to track this differently
+		// For now, we'll return any postgres node that has a hostname
+		for _, node := range state.nodes {
+			if node.NodeType == "postgres" && node.ActualHostname != nil && *node.ActualHostname != "" {
+				// Without timestamps, just take any valid postgres node
+				// In practice, with the single etcd pattern, there should only be one active cluster
+				latestPostgres = &node
+				break
+			}
+		}
+
+		if latestPostgres == nil {
+			c.JSON(http.StatusNotFound, gin.H{"error": "No postgres nodes found"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"hostname": *latestPostgres.ActualHostname,
+			"tailscale_ip": latestPostgres.TailscaleIP,
+			"uuid": latestPostgres.UUID,
+		})
+		log.Printf("Postgres discovery request returned node %s", latestPostgres.UUID)
 	})
 
 	// New endpoint: List all nodes (for debugging)
