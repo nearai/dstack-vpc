@@ -24,6 +24,10 @@ tailscale up \
     --reset \
     --accept-dns
 
+echo "Tailscale started"
+echo "Installing jq..."
+apk add jq
+
 ACTUAL_HOSTNAME=$(tailscale status --json 2>/dev/null | jq -r ".Self.DNSName" | sed "s/\.$//")
 TAILSCALE_IP=$(tailscale ip -4 2>/dev/null || echo "")
 
