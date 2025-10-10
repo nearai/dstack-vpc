@@ -61,7 +61,6 @@ COPY configs/nginx-client-proxy.conf /etc/nginx/conf.d/client-proxy.conf
 COPY configs/nginx-server-proxy.conf.template /etc/nginx/templates/server-proxy.conf.template
 COPY configs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY configs/headscale_config.yaml /etc/headscale/config.yaml
-COPY configs/etcd.yaml /etc/etcd/etcd.yaml
 COPY scripts /scripts
 RUN chmod +x /scripts/*.sh
 
