@@ -443,6 +443,14 @@ func main() {
 			Hostname       string `json:"hostname"`
 		}
 
+		log.Printf("Received node update request")
+		log.Printf("Request headers: %v", c.Request.Header)
+		log.Printf("Request body: ")
+		bodyBytes, _ := io.ReadAll(c.Request.Body)
+		log.Printf("%s", string(bodyBytes))
+		// Restore the body for further processing
+		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+
 		if err := c.BindJSON(&update); err != nil {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
 			return
