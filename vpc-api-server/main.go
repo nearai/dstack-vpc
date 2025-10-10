@@ -23,10 +23,11 @@ type Config struct {
 }
 
 type NodeInfo struct {
-	UUID        string  `json:"uuid"`
-	Name        string  `json:"name"`
-	NodeType    string  `json:"node_type"`
-	TailscaleIP *string `json:"tailscale_ip"`
+	UUID           string  `json:"uuid"`
+	Name           string  `json:"name"`
+	NodeType       string  `json:"node_type"`
+	TailscaleIP    *string `json:"tailscale_ip"`
+	ActualHostname *string `json:"actual_hostname"`
 }
 
 type BootstrapResponse struct {
@@ -413,9 +414,10 @@ func main() {
 		}
 
 		nodeInfo := NodeInfo{
-			UUID:        instanceUUID,
-			Name:        nodeName,
-			TailscaleIP: nil,
+			UUID:           instanceUUID,
+			Name:           nodeName,
+			TailscaleIP:    nil,
+			ActualHostname: nil,
 		}
 
 		state.mutex.Lock()
@@ -430,6 +432,94 @@ func main() {
 
 		log.Printf("Bootstrap request from %s (%s)", nodeName, instanceUUID)
 		c.JSON(http.StatusOK, response)
+	})
+
+	// New endpoint: Update node info (nodes call this after getting Tailscale IP)
+	r.POST("/api/nodes/update", func(c *gin.Context) {
+		var update struct {
+			UUID           string `json:"uuid"`
+			NodeType       string `json:"node_type"`
+			TailscaleIP    string `json:"tailscale_ip"`
+			Hostname       string `json:"hostname"`
+		}
+
+		if err := c.BindJSON(&update); err != nil {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+			return
+		}
+
+		state.mutex.Lock()
+		if node, exists := state.nodes[update.UUID]; exists {
+			node.NodeType = update.NodeType
+			if update.TailscaleIP != "" {
+				node.TailscaleIP = &update.TailscaleIP
+			}
+			if update.Hostname != "" {
+				node.ActualHostname = &update.Hostname
+			}
+			state.nodes[update.UUID] = node
+			state.mutex.Unlock()
+			log.Printf("Updated node %s: type=%s, hostname=%s", update.UUID, update.NodeType, update.Hostname)
+			c.JSON(http.StatusOK, gin.H{"status": "updated"})
+		} else {
+			// Create new node entry if it doesn't exist
+			node := NodeInfo{
+				UUID:           update.UUID,
+				Name:           update.UUID,
+				NodeType:       update.NodeType,
+			}
+			if update.TailscaleIP != "" {
+				node.TailscaleIP = &update.TailscaleIP
+			}
+			if update.Hostname != "" {
+				node.ActualHostname = &update.Hostname
+			}
+			state.nodes[update.UUID] = node
+			state.mutex.Unlock()
+			log.Printf("Created new node %s: type=%s, hostname=%s", update.UUID, update.NodeType, update.Hostname)
+			c.JSON(http.StatusOK, gin.H{"status": "created"})
+		}
+	})
+
+	// New endpoint: Discover etcd servers
+	r.GET("/api/discover/etcd", func(c *gin.Context) {
+		state.mutex.RLock()
+		defer state.mutex.RUnlock()
+
+		var etcdNodes []string
+		for _, node := range state.nodes {
+			if node.NodeType == "etcd" && node.ActualHostname != nil && *node.ActualHostname != "" {
+				// Return format: hostname:2379
+				etcdNodes = append(etcdNodes, fmt.Sprintf("%s:2379", *node.ActualHostname))
+			}
+		}
+
+		if len(etcdNodes) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": "No etcd nodes found"})
+			return
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"etcd_hosts": etcdNodes,
+			"count":      len(etcdNodes),
+		})
+		log.Printf("etcd discovery request returned %d nodes", len(etcdNodes))
+	})
+
+	// New endpoint: List all nodes (for debugging)
+	r.GET("/api/nodes", func(c *gin.Context) {
+		state.mutex.RLock()
+		defer state.mutex.RUnlock()
+
+		var nodes []NodeInfo
+		for _, node := range state.nodes {
+			nodes = append(nodes, node)
+		}
+
+		c.JSON(http.StatusOK, gin.H{
+			"nodes": nodes,
+			"count": len(nodes),
+		})
 	})
 
 	healthHandler := func(c *gin.Context) {
