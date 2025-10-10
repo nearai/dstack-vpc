@@ -8,7 +8,7 @@ COPY main.go ./
 RUN CGO_ENABLED=0 GOOS=linux go build -o api-server
 
 FROM alpine:latest
-RUN apk --no-cache add ca-certificates docker-cli bash
+RUN apk --no-cache add ca-certificates docker-cli bash curl jq
 
 WORKDIR /root/
 
