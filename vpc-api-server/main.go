@@ -436,55 +436,51 @@ func main() {
 
 	// New endpoint: Update node info (nodes call this after getting Tailscale IP)
 	r.POST("/api/nodes/update", func(c *gin.Context) {
-		var update struct {
-			UUID           string `json:"uuid"`
-			NodeType       string `json:"node_type"`
-			TailscaleIP    string `json:"tailscale_ip"`
-			Hostname       string `json:"hostname"`
-		}
+		uuid := c.Query("uuid")
+		nodeType := c.Query("node_type")
+		tailscaleIP := c.Query("tailscale_ip")
+		hostname := c.Query("hostname")
 
 		log.Printf("Received node update request")
-		log.Printf("Request headers: %v", c.Request.Header)
-		log.Printf("Request body: ")
-		bodyBytes, _ := io.ReadAll(c.Request.Body)
-		log.Printf("%s", string(bodyBytes))
-		// Restore the body for further processing
-		c.Request.Body = io.NopCloser(bytes.NewBuffer(bodyBytes))
+		log.Printf("Query params: uuid=%s, node_type=%s, tailscale_ip=%s, hostname=%s", 
+			uuid, nodeType, tailscaleIP, hostname)
 
-		if err := c.BindJSON(&update); err != nil {
-			c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request"})
+		if uuid == "" {
+			c.JSON(http.StatusBadRequest, gin.H{"error": "uuid parameter is required"})
 			return
 		}
 
 		state.mutex.Lock()
-		if node, exists := state.nodes[update.UUID]; exists {
-			node.NodeType = update.NodeType
-			if update.TailscaleIP != "" {
-				node.TailscaleIP = &update.TailscaleIP
+		if node, exists := state.nodes[uuid]; exists {
+			if nodeType != "" {
+				node.NodeType = nodeType
 			}
-			if update.Hostname != "" {
-				node.ActualHostname = &update.Hostname
+			if tailscaleIP != "" {
+				node.TailscaleIP = &tailscaleIP
 			}
-			state.nodes[update.UUID] = node
+			if hostname != "" {
+				node.ActualHostname = &hostname
+			}
+			state.nodes[uuid] = node
 			state.mutex.Unlock()
-			log.Printf("Updated node %s: type=%s, hostname=%s", update.UUID, update.NodeType, update.Hostname)
+			log.Printf("Updated node %s: type=%s, hostname=%s", uuid, nodeType, hostname)
 			c.JSON(http.StatusOK, gin.H{"status": "updated"})
 		} else {
 			// Create new node entry if it doesn't exist
 			node := NodeInfo{
-				UUID:           update.UUID,
-				Name:           update.UUID,
-				NodeType:       update.NodeType,
+				UUID:           uuid,
+				Name:           uuid,
+				NodeType:       nodeType,
 			}
-			if update.TailscaleIP != "" {
-				node.TailscaleIP = &update.TailscaleIP
+			if tailscaleIP != "" {
+				node.TailscaleIP = &tailscaleIP
 			}
-			if update.Hostname != "" {
-				node.ActualHostname = &update.Hostname
+			if hostname != "" {
+				node.ActualHostname = &hostname
 			}
-			state.nodes[update.UUID] = node
+			state.nodes[uuid] = node
 			state.mutex.Unlock()
-			log.Printf("Created new node %s: type=%s, hostname=%s", update.UUID, update.NodeType, update.Hostname)
+			log.Printf("Created new node %s: type=%s, hostname=%s", uuid, nodeType, hostname)
 			c.JSON(http.StatusOK, gin.H{"status": "created"})
 		}
 	})
