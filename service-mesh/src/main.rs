@@ -30,7 +30,9 @@ struct Args {
 #[rocket::main]
 async fn main() -> Result<()> {
     // Initialize tracing with config
-    tracing_subscriber::fmt().init();
+    tracing_subscriber::fmt()
+        .with_max_level(tracing::Level::DEBUG)
+        .init();
 
     let args = Args::parse();
 
