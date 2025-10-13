@@ -432,7 +432,18 @@ async fn proxy_request(
         Err(_) => return Err(Status::MethodNotAllowed),
     };
 
-    let mut request_builder = state.http_client.request(http_method, &url);
+    let mut request_builder = if request.use_tls {
+        state.http_client.request(http_method, &url)
+    } else {
+        // For non-TLS, create a separate client without mTLS
+        let non_tls_client = Client::builder()
+            .use_rustls_tls()
+            .https_only(false)
+            .redirect(Policy::none())
+            .build()
+            .map_err(|_| Status::InternalServerError)?;
+        non_tls_client.request(http_method, &url)
+    };
 
     // Handle body for methods that support it with streaming
     if let Some(body_data) = body {
