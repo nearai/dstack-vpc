@@ -14,7 +14,7 @@ echo 'Starting Tailscale with:'
 echo "  Server: $VPC_SERVER_URL"
 echo "  Hostname: $NODE_NAME"
 
-tailscaled --tun=$TUN_DEV_NAME --state=mem: --socket=/var/run/tailscale/tailscaled.sock &
+tailscaled --tun=$TUN_DEV_NAME --state=/var/lib/tailscale/tailscaled.state --socket=/var/run/tailscale/tailscaled.sock &
 sleep 3
 
 tailscale up \

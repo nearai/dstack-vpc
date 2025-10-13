@@ -393,6 +393,9 @@ func main() {
 		c.Next()
 	})
 
+	// Nodes call this endpoint to be allowed to join the Tailnet
+	// and get the shared key for inter-node communication
+	// Required query params: instance_id, node_name (optional)
 	r.GET("/api/register", func(c *gin.Context) {
 		instanceUUID := c.Query("instance_id")
 		nodeName := c.Query("node_name")
@@ -485,61 +488,44 @@ func main() {
 		}
 	})
 
-	// New endpoint: Discover etcd servers
-	r.GET("/api/discover/etcd", func(c *gin.Context) {
+	// Generic endpoint: Discover nodes by type
+	r.GET("/api/discover/:nodeType", func(c *gin.Context) {
+		nodeType := c.Param("nodeType")
+		
 		state.mutex.RLock()
 		defer state.mutex.RUnlock()
 
-		var etcdNodes []string
+		var discoveredNodes []gin.H
+
+		// Find all nodes of the specified type with hostnames
 		for _, node := range state.nodes {
-			if node.NodeType == "etcd" && node.ActualHostname != nil && *node.ActualHostname != "" {
-				// Return format: hostname:2379
-				etcdNodes = append(etcdNodes, fmt.Sprintf("%s:2379", *node.ActualHostname))
+			if node.NodeType == nodeType && node.ActualHostname != nil && *node.ActualHostname != "" {
+				nodeInfo := gin.H{
+					"hostname": *node.ActualHostname,
+					"tailscale_ip": node.TailscaleIP,
+					"uuid": node.UUID,
+				}
+				
+				// Add port for etcd nodes for backwards compatibility
+				if nodeType == "etcd" {
+					nodeInfo["hostname_with_port"] = fmt.Sprintf("%s:2379", *node.ActualHostname)
+				}
+				
+				discoveredNodes = append(discoveredNodes, nodeInfo)
 			}
 		}
 
-		if len(etcdNodes) == 0 {
-			c.JSON(http.StatusNotFound, gin.H{"error": "No etcd nodes found"})
+		if len(discoveredNodes) == 0 {
+			c.JSON(http.StatusNotFound, gin.H{"error": fmt.Sprintf("No %s nodes found", nodeType)})
 			return
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"etcd_hosts": etcdNodes,
-			"count":      len(etcdNodes),
+			"nodes": discoveredNodes,
+			"count": len(discoveredNodes),
+			"node_type": nodeType,
 		})
-		log.Printf("etcd discovery request returned %d nodes", len(etcdNodes))
-	})
-
-	// New endpoint: Get last registered postgres node
-	r.GET("/api/discover/postgres", func(c *gin.Context) {
-		state.mutex.RLock()
-		defer state.mutex.RUnlock()
-
-		var latestPostgres *NodeInfo
-
-		// Find the most recently added postgres node
-		// Since Go maps don't preserve insertion order, we'll need to track this differently
-		// For now, we'll return any postgres node that has a hostname
-		for _, node := range state.nodes {
-			if node.NodeType == "postgres" && node.ActualHostname != nil && *node.ActualHostname != "" {
-				// Without timestamps, just take any valid postgres node
-				// In practice, with the single etcd pattern, there should only be one active cluster
-				latestPostgres = &node
-				break
-			}
-		}
-
-		if latestPostgres == nil {
-			c.JSON(http.StatusNotFound, gin.H{"error": "No postgres nodes found"})
-			return
-		}
-
-		c.JSON(http.StatusOK, gin.H{
-			"hostname": *latestPostgres.ActualHostname,
-			"tailscale_ip": latestPostgres.TailscaleIP,
-			"uuid": latestPostgres.UUID,
-		})
-		log.Printf("Postgres discovery request returned node %s", latestPostgres.UUID)
+		log.Printf("%s discovery request returned %d nodes", nodeType, len(discoveredNodes))
 	})
 
 	// New endpoint: List all nodes (for debugging)
