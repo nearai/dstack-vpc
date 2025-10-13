@@ -420,7 +420,7 @@ async fn proxy_request(
             if request.use_tls {
                 format!("https://{id}-{port}s.{gateway_domain}/{full_path}")
             } else {
-                format!("http://{id}-{port}.{gateway_domain}/{full_path}")
+                format!("https://{id}-{port}.{gateway_domain}/{full_path}")
             }
         }
     };
