@@ -473,7 +473,8 @@ async fn proxy_request(
         "Proxying request to app_id '{}' at URL: {}",
         target.app_id, url
     );
-    debug!("Full request headers: {:?}", request.all_headers);
+    info!("Full request headers: {:?}", request.all_headers);
+    dbg!(&request_builder);
 
     // Execute request
     match request_builder.send().await {
