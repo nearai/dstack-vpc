@@ -490,12 +490,14 @@ async fn proxy_request(
     // Execute request
     match request_builder.send().await {
         Ok(response) => {
-            // TODO: It should be verified before sending the request. But reqwest doesn't support it.
-            if let Err(err) = verify_response_security(&response, &target)
-                .context("Failed to verify response security")
-            {
-                warn!("Failed to verify response security: {err:?}");
-                return Err(Status::BadGateway);
+            if request.use_tls {
+                // TODO: It should be verified before sending the request. But reqwest doesn't support it.
+                if let Err(err) = verify_response_security(&response, &target)
+                    .context("Failed to verify response security")
+                {
+                    warn!("Failed to verify response security: {err:?}");
+                    return Err(Status::BadGateway);
+                }
             }
             // Return the response directly for streaming - no buffering!
             Ok(ProxyResponse::Stream(StreamingProxyResponse { response }))
