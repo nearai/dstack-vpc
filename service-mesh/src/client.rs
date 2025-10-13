@@ -150,6 +150,7 @@ pub struct DstackRequest {
     pub query_string: Option<String>,
     pub path: String,
     pub method: String,
+    pub use_tls: bool,
 }
 
 #[rocket::async_trait]
@@ -167,6 +168,10 @@ impl<'r> FromRequest<'r> for DstackRequest {
         let target_instance = headers
             .get_one("x-dstack-target-instance")
             .map(|s| s.to_string());
+        let use_tls = headers
+            .get_one("x-dstack-target-use-tls")
+            .map(|s| s == "true" || s == "1")
+            .unwrap_or(true);
 
         let all_headers = headers
             .iter()
@@ -189,6 +194,7 @@ impl<'r> FromRequest<'r> for DstackRequest {
             query_string,
             path,
             method,
+            use_tls,
         })
     }
 }
@@ -411,7 +417,11 @@ async fn proxy_request(
                 &target.instance_id
             };
             let port = &target.port;
-            format!("https://{id}-{port}s.{gateway_domain}/{full_path}")
+            if request.use_tls {
+                format!("https://{id}-{port}s.{gateway_domain}/{full_path}")
+            } else {
+                format!("http://{id}-{port}.{gateway_domain}/{full_path}")
+            }
         }
     };
 

@@ -37,3 +37,4 @@ echo "$TAILSCALE_IP" > /shared/tailscale_ip
 
 echo 'Tailscale connected successfully'
 tail -f /dev/null
+
