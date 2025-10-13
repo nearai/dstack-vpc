@@ -4,7 +4,7 @@ RUN rustup target add x86_64-unknown-linux-musl
 WORKDIR /build
 COPY service-mesh/ /build/service-mesh/
 WORKDIR /build/service-mesh
-RUN cargo build --release --target x86_64-unknown-linux-musl
+RUN cargo build --target x86_64-unknown-linux-musl
 
 FROM golang:1.23-alpine AS go-builder
 WORKDIR /build
@@ -48,7 +48,7 @@ RUN mkdir -p /var/run/dstack \
     /var/lib/etcd \
     /etc/etcd
 
-COPY --from=rust-builder /build/service-mesh/target/x86_64-unknown-linux-musl/release/dstack-mesh /usr/local/bin/dstack-mesh
+COPY --from=rust-builder /build/service-mesh/target/x86_64-unknown-linux-musl/debug/dstack-mesh /usr/local/bin/dstack-mesh
 RUN chmod +x /usr/local/bin/dstack-mesh
 
 COPY --from=go-builder /build/vpc-api-server /usr/local/bin/vpc-api-server
