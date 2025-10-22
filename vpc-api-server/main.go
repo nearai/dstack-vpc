@@ -149,7 +149,7 @@ func parseAllowedApps(allowedApps string) []string {
 
 func (s *AppState) isAppAllowed(appID string) bool {
 	for _, allowed := range s.config.AllowedApps {
-		if allowed == "any" || allowed == appID {
+		if allowed == "any" || allowed.Lower() == appID.Lower() {
 			return true
 		}
 	}
