@@ -1,6 +1,6 @@
 #!/bin/bash
 
-IMAGE_NAME="endnearai/dstack-service"
+IMAGE_NAME="nearaidev/dstack-service"
 PUSH_IMAGE=false
 
 while [[ $# -gt 0 ]]; do
