@@ -5,6 +5,7 @@ echo 'Waiting for bootstrap files...'
 while [ ! -f /shared/pre_auth_key ] || [ ! -f /shared/server_url ]; do
     sleep 2
 done
+sleep 1
 
 PRE_AUTH_KEY=$(cat /shared/pre_auth_key)
 VPC_SERVER_URL=$(cat /shared/server_url)

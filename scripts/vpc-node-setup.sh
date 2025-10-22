@@ -32,6 +32,8 @@ echo "Response: $RESPONSE"
 exit 1
 fi
 
+echo "vpc-server-url: $VPC_SERVER_URL"
+
 echo "$PRE_AUTH_KEY" > /shared/pre_auth_key
 echo "$SHARED_KEY" > /shared/shared_key
 echo "$VPC_SERVER_URL" > /shared/server_url
