@@ -95,6 +95,22 @@ COPY --chmod=666 scripts/* /scripts/
 
 COPY --chmod=666 .GIT_REV /etc/
 
+# Remove all non-deterministic files
+RUN rm -rf \
+    /var/log/dpkg.log \
+    /var/log/apt/*.log \
+    /var/log/alternatives.log \
+    /var/cache/ldconfig/aux-cache \
+    /etc/machine-id \
+    /var/lib/dbus/machine-id \
+    /var/log/*.log \
+    /tmp/* \
+    /var/tmp/* && \
+    # Create empty machine-id files for deterministic builds
+    touch /etc/machine-id /var/lib/dbus/machine-id && \
+    # Ensure log directories exist but are empty
+    mkdir -p /var/log/apt /var/log/supervisor /var/log/nginx
+
 EXPOSE 80 443 8091 8092 2379 2380
 
 HEALTHCHECK CMD /scripts/healthcheck.sh
