@@ -27,8 +27,12 @@ FROM debian:bookworm-slim@sha256:78d2f66e0fec9e5a39fb2c72ea5e052b548df75602b5215
 # Bootstrap by installing ca-certificates which will be overridden by the pinned packages.
 # Otherwise the source list cannot be fetched from the debian snapshot.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates \
+    apt-get install -y --no-install-recommends ca-certificates curl \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
+
+# Install Docker before package pinning (Docker installation conflicts with pinned packages)
+RUN curl -fsSL https://get.docker.com | sh && \
+    usermod -aG docker root
 
 # Install pinned apt dependencies
 RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt,ro \
@@ -60,11 +64,7 @@ RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt
         kmod \
         etcd-server \
         etcd-client \
-        && rm -rf /var/log/* /var/cache/ldconfig/aux-cache
-
-RUN curl -fsSL https://get.docker.com | sh \
-    && usermod -aG docker root \
-    && rm -rf /var/lib/apt/lists/* 
+        && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 
 RUN mkdir -p /var/run/dstack \
     /etc/dstack \
