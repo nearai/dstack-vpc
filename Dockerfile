@@ -27,7 +27,7 @@ FROM ubuntu:24.04@sha256:66460d557b25769b102175144d538d88219c077c678a49af4afca6f
 # Bootstrap by installing ca-certificates which will be overridden by the pinned packages.
 # Otherwise the source list cannot be fetched from the debian snapshot.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates \
+    apt-get install -y --no-install-recommends ca-certificates debian-archive-keyring gnupg \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 
 # Install pinned apt dependencies
@@ -61,6 +61,8 @@ RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt
         kmod \
         etcd-server \
         etcd-client \
+        debian-archive-keyring \
+        gnupg \
         && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 
 RUN curl -fsSL https://get.docker.com | sh
