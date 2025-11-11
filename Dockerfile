@@ -60,10 +60,11 @@ RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt
         kmod \
         etcd-server \
         etcd-client \
-        && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
+        && rm -rf /var/log/* /var/cache/ldconfig/aux-cache
 
-RUN curl -fsSL https://get.docker.com | sh
-RUN usermod -aG docker root
+RUN curl -fsSL https://get.docker.com | sh \
+    && usermod -aG docker root \
+    && rm -rf /var/lib/apt/lists/* 
 
 RUN mkdir -p /var/run/dstack \
     /etc/dstack \
