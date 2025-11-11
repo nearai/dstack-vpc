@@ -77,23 +77,23 @@ RUN mkdir -p /var/run/dstack \
     /var/lib/etcd \
     /etc/etcd
 
-COPY --from=rust-builder /build/service-mesh/target/x86_64-unknown-linux-musl/debug/dstack-mesh /usr/local/bin/dstack-mesh
-RUN chmod +x /usr/local/bin/dstack-mesh
+# Copy binaries
+COPY --chmod=666 --from=rust-builder /build/service-mesh/target/x86_64-unknown-linux-musl/debug/dstack-mesh /usr/local/bin/dstack-mesh
+COPY --chmod=666 --from=go-builder /build/vpc-api-server /usr/local/bin/vpc-api-server
+COPY --chmod=666 --from=ko-builder /build/netfilter-modules/*.ko /lib/extra-modules/
 
-COPY --from=go-builder /build/vpc-api-server /usr/local/bin/vpc-api-server
-RUN chmod +x /usr/local/bin/vpc-api-server
+# Copy configs
+COPY --chmod=666 configs/nginx.conf /etc/nginx/nginx.conf
+COPY --chmod=666 configs/nginx-client-proxy.conf /etc/nginx/conf.d/client-proxy.conf
+COPY --chmod=666 configs/nginx-server-proxy.conf.template /etc/nginx/templates/server-proxy.conf.template
+COPY --chmod=666 configs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY --chmod=666 configs/headscale_config.yaml /etc/headscale/config.yaml
 
-COPY --from=ko-builder /build/netfilter-modules/*.ko /lib/extra-modules/
+# Copy scripts
+RUN mkdir -p /scripts
+COPY --chmod=666 scripts/* /scripts/
 
-COPY configs/nginx.conf /etc/nginx/nginx.conf
-COPY configs/nginx-client-proxy.conf /etc/nginx/conf.d/client-proxy.conf
-COPY configs/nginx-server-proxy.conf.template /etc/nginx/templates/server-proxy.conf.template
-COPY configs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY configs/headscale_config.yaml /etc/headscale/config.yaml
-COPY scripts /scripts
-RUN chmod +x /scripts/*.sh
-
-COPY --chmod=664 .GIT_REV /etc/
+COPY --chmod=666 .GIT_REV /etc/
 
 EXPOSE 80 443 8091 8092 2379 2380
 

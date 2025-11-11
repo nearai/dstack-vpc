@@ -4,6 +4,10 @@
 PUSH=false
 REPO=""
 
+# Enforce scripts folder permissions
+find ./scripts -type f -exec chmod 0666 {} + && \
+    find ./scripts -type d -exec chmod 0755 {} +
+
 while [[ $# -gt 0 ]]; do
     case $1 in
         --push)
