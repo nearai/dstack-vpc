@@ -24,19 +24,23 @@ RUN ./extract-modules.sh
 
 FROM ubuntu:24.04@sha256:66460d557b25769b102175144d538d88219c077c678a49af4afca6fbfc1b5252
 
-# Bootstrap by installing ca-certificates which will be overridden by the pinned packages.
+# Bootstrap by installing ca-certificates and gnupg2 which will be overridden by the pinned packages.
 # Otherwise the source list cannot be fetched from the debian snapshot.
 RUN apt-get update && \
-    apt-get install -y --no-install-recommends ca-certificates debian-archive-keyring gnupg \
+    apt-get install -y --no-install-recommends ca-certificates gnupg2 \
     && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 
 # Install pinned apt dependencies
 RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt,ro \
     set -e; \
+    # Import Debian GPG keys (required for Ubuntu to use Debian repositories)
+    mkdir -p /etc/apt/keyrings && \
+    gpg --no-default-keyring --keyring /etc/apt/keyrings/debian-archive-bookworm.gpg --keyserver keyserver.ubuntu.com --recv-keys 0E98404D386FA1D9 6ED0E7B82643E131 F8D2585B8783D481 && \
+    gpg --no-default-keyring --keyring /etc/apt/keyrings/debian-security-bookworm.gpg --keyserver keyserver.ubuntu.com --recv-keys 54404762BBB6E853 BDE6D2B9216EC7A8 && \
     # Create a sources.list file pointing to a specific snapshot
     # Using Debian bookworm snapshot as Ubuntu 24.04 is compatible
-    echo 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian/20250411T024939Z bookworm main' > /etc/apt/sources.list && \
-    echo 'deb [check-valid-until=no] https://snapshot.debian.org/archive/debian-security/20250411T024939Z bookworm-security main' >> /etc/apt/sources.list && \
+    echo 'deb [check-valid-until=no signed-by=/etc/apt/keyrings/debian-archive-bookworm.gpg] https://snapshot.debian.org/archive/debian/20250411T024939Z bookworm main' > /etc/apt/sources.list && \
+    echo 'deb [check-valid-until=no signed-by=/etc/apt/keyrings/debian-security-bookworm.gpg] https://snapshot.debian.org/archive/debian-security/20250411T024939Z bookworm-security main' >> /etc/apt/sources.list && \
     echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/10no-check-valid-until && \
     # Create preferences file to pin all packages
     rm -rf /etc/apt/sources.list.d/* && \
@@ -61,8 +65,7 @@ RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt
         kmod \
         etcd-server \
         etcd-client \
-        debian-archive-keyring \
-        gnupg \
+        gnupg2 \
         && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 
 RUN curl -fsSL https://get.docker.com | sh
