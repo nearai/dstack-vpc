@@ -72,28 +72,26 @@ RUN mkdir -p /var/run/dstack \
     /etc/ssl/private \
     /var/log/supervisor \
     /var/log/nginx \
-    /scripts \
     /lib/extra-modules \
     /var/lib/etcd \
     /etc/etcd
 
-# Copy binaries
-COPY --chmod=666 --from=rust-builder /build/service-mesh/target/x86_64-unknown-linux-musl/debug/dstack-mesh /usr/local/bin/dstack-mesh
-COPY --chmod=666 --from=go-builder /build/vpc-api-server /usr/local/bin/vpc-api-server
-COPY --chmod=666 --from=ko-builder /build/netfilter-modules/*.ko /lib/extra-modules/
+# Copy binaries (executable)
+COPY --chmod=755 --from=rust-builder /build/service-mesh/target/x86_64-unknown-linux-musl/debug/dstack-mesh /usr/local/bin/dstack-mesh
+COPY --chmod=755 --from=go-builder /build/vpc-api-server /usr/local/bin/vpc-api-server
+COPY --chmod=644 --from=ko-builder /build/netfilter-modules/*.ko /lib/extra-modules/
 
-# Copy configs
-COPY --chmod=666 configs/nginx.conf /etc/nginx/nginx.conf
-COPY --chmod=666 configs/nginx-client-proxy.conf /etc/nginx/conf.d/client-proxy.conf
-COPY --chmod=666 configs/nginx-server-proxy.conf.template /etc/nginx/templates/server-proxy.conf.template
-COPY --chmod=666 configs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
-COPY --chmod=666 configs/headscale_config.yaml /etc/headscale/config.yaml
+# Copy configs (read-only)
+COPY --chmod=644 configs/nginx.conf /etc/nginx/nginx.conf
+COPY --chmod=644 configs/nginx-client-proxy.conf /etc/nginx/conf.d/client-proxy.conf
+COPY --chmod=644 configs/nginx-server-proxy.conf.template /etc/nginx/templates/server-proxy.conf.template
+COPY --chmod=644 configs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
+COPY --chmod=644 configs/headscale_config.yaml /etc/headscale/config.yaml
 
-# Copy scripts
-RUN mkdir -p /scripts
-COPY --chmod=666 scripts/* /scripts/
+# Copy scripts (executable)
+COPY --chmod=755 scripts/ /scripts/
 
-COPY --chmod=666 .GIT_REV /etc/
+COPY --chmod=644 .GIT_REV /etc/
 
 # Remove all non-deterministic files
 RUN rm -rf \
