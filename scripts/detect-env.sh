@@ -1,12 +1,26 @@
 #!/bin/bash
 
 get_container_id() {
+    local id=""
     if [ -f /proc/1/cgroup ]; then
-        grep -o 'docker/[^/]*' /proc/1/cgroup | head -1 | cut -d'/' -f2
+        id=$(grep -o 'docker/[^/]*' /proc/1/cgroup | head -1 | cut -d'/' -f2)
     fi
+
+    if [ -z "$id" ] && [ -f /proc/self/mountinfo ]; then
+        id=$(grep '/docker/containers/' /proc/self/mountinfo | head -n1 | sed 's/.*\/docker\/containers\///' | sed 's/\/.*//')
+    fi
+
+    if [ -z "$id" ]; then
+        id=$(hostname)
+    fi
+    echo "$id"
 }
 
 DSTACK_CONTAINER_ID=$(get_container_id)
+if [ -z "$DSTACK_CONTAINER_ID" ]; then
+    echo "ERROR: Could not determine container ID"
+    exit 1
+fi
 DSTACK_CONTAINER_IMAGE_ID=$(docker inspect $DSTACK_CONTAINER_ID --format='{{.Image}}')
 SYS_CONFIG=$(docker run --rm --name dstack-get-syscfg -v /dstack:/dstack $DSTACK_CONTAINER_IMAGE_ID cat /dstack/.host-shared/.sys-config.json 2>/dev/null)
 
