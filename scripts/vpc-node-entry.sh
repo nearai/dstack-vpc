@@ -37,5 +37,13 @@ echo "$ACTUAL_HOSTNAME" > /shared/actual_hostname
 echo "$TAILSCALE_IP" > /shared/tailscale_ip
 
 echo 'Tailscale connected successfully'
-tail -f /dev/null
 
+# Start status updater
+STATUS_UPDATE_INTERVAL=${STATUS_UPDATE_INTERVAL:-30}
+echo "Starting status updater (interval: ${STATUS_UPDATE_INTERVAL}s)..."
+
+while true; do
+    tailscale status --json > /shared/tailscale_status.json 2>/dev/null || echo "Failed to get status" > /shared/tailscale_status.json
+    echo "Status updated"
+    sleep $STATUS_UPDATE_INTERVAL
+done 
