@@ -1,35 +1,85 @@
 #!/bin/bash
 
-IMAGE_NAME="nearaidev/dstack-service"
-PUSH_IMAGE=false
+# Parse command line arguments
+PUSH=false
+REPO=""
 
 while [[ $# -gt 0 ]]; do
-    case "$1" in
+    case $1 in
         --push)
-            PUSH_IMAGE=true
-            shift
-            ;;
-        -t)
-            IMAGE_NAME="$2"
+            PUSH=true
+            REPO="$2"
+            if [ -z "$REPO" ]; then
+                echo "Error: --push requires a repository argument"
+                echo "Usage: $0 [--push <repo>[:<tag>]]"
+                exit 1
+            fi
             shift 2
             ;;
         *)
-            echo "Unknown argument: $1"
+            echo "Usage: $0 [--push <repo>[:<tag>]]"
             exit 1
             ;;
     esac
 done
 
-THIS_DIR=$(cd "$(dirname "$0")" && pwd)
+require_command() {
+    local cmd="$1"
+    if ! command -v "$cmd" >/dev/null 2>&1; then
+        echo "Error: required command '$cmd' not found in PATH" >&2
+        exit 1
+    fi
+}
 
-docker build "$THIS_DIR" -t "$IMAGE_NAME"
+for required in docker skopeo jq git; do
+    require_command "$required"
+done
 
-if [ "$PUSH_IMAGE" = true ]; then
-    echo "Pushing image to Docker Hub..."
-    docker push "$IMAGE_NAME"
-    echo "Image pushed successfully!"
-else
-    echo "Image built locally. To push to Docker Hub, use:"
-    echo "  docker push $IMAGE_NAME"
-    echo "Or run this script with --push flag"
+# Check if buildkit_20 already exists before creating it
+if ! docker buildx inspect buildkit_20 &>/dev/null; then
+    docker buildx create --use --driver-opt image=moby/buildkit:v0.20.2 --name buildkit_20
 fi
+touch pinned-packages.txt
+git rev-parse HEAD > .GIT_REV
+TEMP_TAG="dstack-vpc-temp:$(date +%s)"
+docker buildx build --builder buildkit_20 --no-cache --build-arg SOURCE_DATE_EPOCH="0" \
+    --output type=oci,dest=./oci.tar,rewrite-timestamp=true \
+    --output type=docker,name="$TEMP_TAG",rewrite-timestamp=true .
+
+if [ "$?" -ne 0 ]; then
+    echo "Build failed"
+    rm .GIT_REV
+    exit 1
+fi
+
+echo "Build completed, manifest digest:"
+echo ""
+skopeo inspect oci-archive:./oci.tar | jq .Digest
+echo ""
+
+if [ "$PUSH" = true ]; then
+    echo "Pushing image to $REPO..."
+    skopeo copy --insecure-policy oci-archive:./oci.tar docker://"$REPO"
+    echo "Image pushed successfully to $REPO"
+else
+    echo "To push the image to a registry, run:"
+    echo ""
+    echo " $0 --push <repo>[:<tag>]"
+    echo ""
+    echo "Or use skopeo directly:"
+    echo ""
+    echo " skopeo copy --insecure-policy oci-archive:./oci.tar docker://<repo>[:<tag>]"
+    echo ""
+fi
+echo ""
+
+# Extract package information from the built image
+echo "Extracting package information from built image: $TEMP_TAG"
+docker run --rm --entrypoint bash "$TEMP_TAG" -c "dpkg -l | grep '^ii' | awk '{print \$2\"=\"\$3}' | sort" > pinned-packages.txt
+
+echo "Package information extracted to pinned-packages.txt ($(wc -l < pinned-packages.txt) packages)"
+
+# Clean up the temporary image from Docker daemon
+docker rmi "$TEMP_TAG" 2>/dev/null || true
+
+rm .GIT_REV
