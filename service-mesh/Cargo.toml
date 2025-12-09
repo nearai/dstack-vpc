@@ -6,7 +6,10 @@ edition = "2021"
 license = "MIT"
 
 [dependencies]
-rocket = { git = "https://github.com/rwf2/Rocket", branch = "master", features = ["mtls", "json"] }
+rocket = { git = "https://github.com/rwf2/Rocket", branch = "master", features = [
+    "mtls",
+    "json",
+] }
 tokio = { version = "1.0", features = ["full"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -17,15 +20,22 @@ anyhow = "1.0"
 clap = { version = "4.0", features = ["derive", "env"] }
 
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 load_config = { git = "https://github.com/Dstack-TEE/dstack.git" }
 ra-tls = { git = "https://github.com/Dstack-TEE/dstack.git" }
-ra-rpc = { git = "https://github.com/Dstack-TEE/dstack.git", features = ["client", "rocket"] }
+ra-rpc = { git = "https://github.com/Dstack-TEE/dstack.git", features = [
+    "client",
+    "rocket",
+] }
 dstack-types = { git = "https://github.com/Dstack-TEE/dstack.git" }
 git-version = "0.3"
 url = "2.5"
-reqwest = { version = "0.12.23", default-features = false, features = ["rustls-tls", "json", "stream"] }
+reqwest = { version = "0.12.23", default-features = false, features = [
+    "rustls-tls",
+    "json",
+    "stream",
+] }
 futures-util = "0.3"
 bytes = "1.0"
 
