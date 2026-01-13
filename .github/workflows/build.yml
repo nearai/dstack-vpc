@@ -4,7 +4,6 @@ on:
   push:
     branches:
       - main
-      - chore/reproducible-build
     tags:
       - 'v*'
 
