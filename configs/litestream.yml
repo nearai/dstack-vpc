@@ -1,0 +1,8 @@
+dbs:
+  - path: /var/lib/headscale/db.sqlite
+    replicas:
+      - type: s3
+        bucket: ${LITESTREAM_S3_BUCKET}
+        path: ${LITESTREAM_S3_PATH}
+        region: ${AWS_REGION}
+        sync-interval: 1s
