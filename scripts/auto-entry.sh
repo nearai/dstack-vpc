@@ -78,16 +78,24 @@ if [ "${VPC_SERVER_ENABLED}" == "true" ] && [ -n "${LITESTREAM_S3_BUCKET}" ]; th
 
     # Restore noise_private.key (headscale server identity) from S3 if it exists
     # This is critical - without the same key, existing clients won't reconnect
-    echo "Checking for noise_private.key backup in S3..."
-    docker run --rm \
-        -v vpc_server_data:/var/lib/headscale \
-        -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
-        -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
-        -e AWS_REGION="${AWS_REGION}" \
-        amazon/aws-cli \
-        s3 cp "s3://${LITESTREAM_S3_BUCKET}/${LITESTREAM_S3_PATH}/noise_private.key" /var/lib/headscale/noise_private.key \
-        && echo "noise_private.key restored from S3" \
-        || echo "noise_private.key not found in S3 (first deployment or new key will be generated)"
+    # Only restore if the key doesn't already exist locally
+    KEY_EXISTS=$(docker run --rm -v vpc_server_data:/var/lib/headscale "${DSTACK_CONTAINER_IMAGE_ID}" sh -c '[ -f /var/lib/headscale/noise_private.key ] && echo "yes" || echo "no"')
+
+    if [ "$KEY_EXISTS" == "no" ]; then
+        echo "Checking for noise_private.key backup in S3..."
+        docker run --rm \
+            --entrypoint "" \
+            -v vpc_server_data:/var/lib/headscale \
+            -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+            -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+            -e AWS_REGION="${AWS_REGION}" \
+            amazon/aws-cli \
+            aws s3 cp "s3://${LITESTREAM_S3_BUCKET}/${LITESTREAM_S3_PATH}/noise_private.key" /var/lib/headscale/noise_private.key \
+            && echo "noise_private.key restored from S3" \
+            || echo "noise_private.key not found in S3 (first deployment or new key will be generated)"
+    else
+        echo "noise_private.key already exists locally, skipping S3 restore"
+    fi
 fi
 
 socat TCP-LISTEN:80,fork TCP:$MESH_CONTAINER_NAME:80 &

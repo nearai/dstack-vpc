@@ -213,6 +213,7 @@ gen-noise-key-backup() {
   LITESTREAM_S3_PATH="${LITESTREAM_S3_PATH:-headscale}"
   AWS_REGION="${AWS_REGION:-us-west-2}"
 
+  # Part 1: Container definition (needs variable expansion for env vars)
   cat <<EOF
   noise-key-backup:
     image: amazon/aws-cli
@@ -227,24 +228,30 @@ gen-noise-key-backup() {
       - AWS_REGION=$AWS_REGION
     volumes:
       - vpc_server_data:/var/lib/headscale:ro
-    command: >
-      sh -c '
+    command:
+      - sh
+      - -c
+      - |
         KEY_PATH=/var/lib/headscale/noise_private.key
         S3_PATH=s3://$LITESTREAM_S3_BUCKET/$LITESTREAM_S3_PATH/noise_private.key
 
         echo "Checking if noise_private.key needs to be backed up..."
-
-        if aws s3 ls "\$S3_PATH" >/dev/null 2>&1; then
+EOF
+  # Part 2: Script body (no variable expansion - use quoted heredoc with $$ for Docker Compose)
+  cat <<'BACKUP_SCRIPT'
+        if aws s3 ls "$$S3_PATH" >/dev/null 2>&1; then
           echo "noise_private.key already exists in S3, skipping upload"
-        elif [ -f "\$KEY_PATH" ]; then
+        elif [ -f "$$KEY_PATH" ]; then
           echo "Uploading noise_private.key to S3..."
-          aws s3 cp "\$KEY_PATH" "\$S3_PATH"
+          aws s3 cp "$$KEY_PATH" "$$S3_PATH"
           echo "noise_private.key backed up to S3"
         else
           echo "noise_private.key not found locally, will retry"
           exit 1
         fi
-      '
+BACKUP_SCRIPT
+  # Part 3: Container footer
+  cat <<EOF
     depends_on:
       vpc-server:
         condition: service_healthy
