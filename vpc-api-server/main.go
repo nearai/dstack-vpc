@@ -372,7 +372,8 @@ func main() {
 	r := gin.Default()
 
 	r.Use(func(c *gin.Context) {
-		if c.Request.URL.Path == "/health" {
+		// Skip auth for health check endpoints
+		if c.Request.URL.Path == "/health" || c.Request.URL.Path == "/api/ping" {
 			c.Next()
 			return
 		}
@@ -542,6 +543,11 @@ func main() {
 			"nodes": nodes,
 			"count": len(nodes),
 		})
+	})
+
+	// Simple ping endpoint for health checks (not intercepted by mesh)
+	r.GET("/api/ping", func(c *gin.Context) {
+		c.String(http.StatusOK, "pong")
 	})
 
 	healthHandler := func(c *gin.Context) {

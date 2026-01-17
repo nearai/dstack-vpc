@@ -66,12 +66,19 @@ RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt
         etcd-client \
         && rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache
 
+# Install litestream for SQLite replication to S3
+RUN wget -q -O /tmp/litestream.tar.gz \
+        https://github.com/benbjohnson/litestream/releases/download/v0.3.13/litestream-v0.3.13-linux-amd64.tar.gz && \
+    tar -xzf /tmp/litestream.tar.gz -C /usr/local/bin/ litestream && \
+    rm /tmp/litestream.tar.gz
+
 RUN mkdir -p /var/run/dstack \
     /etc/dstack \
     /etc/ssl/certs \
     /etc/ssl/private \
     /var/log/supervisor \
     /var/log/nginx \
+    /configs \
     /lib/extra-modules \
     /var/lib/etcd \
     /etc/etcd
@@ -85,8 +92,10 @@ COPY --chmod=644 --from=ko-builder /build/netfilter-modules/*.ko /lib/extra-modu
 COPY --chmod=644 configs/nginx.conf /etc/nginx/nginx.conf
 COPY --chmod=644 configs/nginx-client-proxy.conf /etc/nginx/conf.d/client-proxy.conf
 COPY --chmod=644 configs/nginx-server-proxy.conf.template /etc/nginx/templates/server-proxy.conf.template
+COPY --chmod=644 configs/nginx-lb.conf /configs/nginx-lb.conf
 COPY --chmod=644 configs/supervisord.conf /etc/supervisor/conf.d/supervisord.conf
 COPY --chmod=644 configs/headscale_config.yaml /etc/headscale/config.yaml
+COPY --chmod=644 configs/litestream.yml /configs/litestream.yml
 
 # Copy scripts (executable)
 COPY --chmod=755 scripts/ /scripts/
