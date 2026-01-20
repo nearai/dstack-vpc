@@ -213,15 +213,65 @@ gen-noise-key-backup() {
   LITESTREAM_S3_PATH="${LITESTREAM_S3_PATH:-headscale}"
   AWS_REGION="${AWS_REGION:-us-west-2}"
 
-  # Part 1: Container definition (needs variable expansion for env vars)
+  # Step 1: Encrypt the noise key using dstack image (has openssl/jq)
   cat <<EOF
-  noise-key-backup:
+  noise-key-encrypt:
+    image: $DSTACK_CONTAINER_IMAGE_ID
+    container_name: noise-key-encrypt
+    restart: "no"
+    labels:
+      com.datadoghq.ad.logs: '[{"source": "noise-key-encrypt", "service": "noise-key-encrypt"}]'
+    volumes:
+      - vpc_server_data:/var/lib/headscale
+      - /dstack/.host-shared:/host-shared:ro
+    command:
+      - sh
+      - -c
+      - |
+        KEY_PATH=/var/lib/headscale/noise_private.key
+        ENCRYPTED_PATH=/var/lib/headscale/noise_private.key.enc
+
+        echo "Preparing to encrypt noise_private.key..."
+EOF
+  cat <<'ENCRYPT_SCRIPT'
+        # Wait for headscale to generate the key
+        if [ ! -f "$$KEY_PATH" ]; then
+          echo "noise_private.key not found, waiting for headscale to generate it..."
+          exit 1
+        fi
+
+        # Get env_crypt_key from appkeys (stable across redeployments based on app_id)
+        ENV_CRYPT_KEY=$$(cat /host-shared/.appkeys.json | jq -r '.env_crypt_key')
+        if [ -z "$$ENV_CRYPT_KEY" ] || [ "$$ENV_CRYPT_KEY" == "null" ]; then
+          echo "ERROR: Could not get env_crypt_key from appkeys"
+          exit 1
+        fi
+
+        # Always encrypt the current key (will be uploaded to S3 to keep backup in sync)
+        echo "Encrypting noise_private.key with env_crypt_key..."
+        openssl enc -aes-256-cbc -salt -pbkdf2 -in "$$KEY_PATH" -out "$$ENCRYPTED_PATH" -pass pass:"$$ENV_CRYPT_KEY"
+
+        if [ -f "$$ENCRYPTED_PATH" ]; then
+          echo "noise_private.key encrypted successfully"
+        else
+          echo "ERROR: Encryption failed"
+          exit 1
+        fi
+ENCRYPT_SCRIPT
+  cat <<EOF
+    depends_on:
+      vpc-server:
+        condition: service_healthy
+    networks:
+      - project
+
+  noise-key-upload:
     image: amazon/aws-cli
-    container_name: noise-key-backup
+    container_name: noise-key-upload
     restart: "no"
     entrypoint: [""]
     labels:
-      com.datadoghq.ad.logs: '[{"source": "noise-key-backup", "service": "noise-key-backup"}]'
+      com.datadoghq.ad.logs: '[{"source": "noise-key-upload", "service": "noise-key-upload"}]'
     environment:
       - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
       - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
@@ -232,29 +282,25 @@ gen-noise-key-backup() {
       - sh
       - -c
       - |
-        KEY_PATH=/var/lib/headscale/noise_private.key
-        S3_PATH=s3://$LITESTREAM_S3_BUCKET/$LITESTREAM_S3_PATH/noise_private.key
+        ENCRYPTED_PATH=/var/lib/headscale/noise_private.key.enc
+        S3_PATH=s3://$LITESTREAM_S3_BUCKET/$LITESTREAM_S3_PATH/noise_private.key.enc
 
-        echo "Checking if noise_private.key needs to be backed up..."
+        echo "Uploading encrypted noise_private.key to S3..."
 EOF
-  # Part 2: Script body (no variable expansion - use quoted heredoc with $$ for Docker Compose)
-  cat <<'BACKUP_SCRIPT'
-        if aws s3 ls "$$S3_PATH" >/dev/null 2>&1; then
-          echo "noise_private.key already exists in S3, skipping upload"
-        elif [ -f "$$KEY_PATH" ]; then
-          echo "Uploading noise_private.key to S3..."
-          aws s3 cp "$$KEY_PATH" "$$S3_PATH"
-          echo "noise_private.key backed up to S3"
-        else
-          echo "noise_private.key not found locally, will retry"
+  cat <<'UPLOAD_SCRIPT'
+        if [ ! -f "$$ENCRYPTED_PATH" ]; then
+          echo "noise_private.key.enc not found locally (encryption may have failed)"
           exit 1
         fi
-BACKUP_SCRIPT
-  # Part 3: Container footer
+
+        # Always upload to keep S3 backup in sync with current key
+        aws s3 cp "$$ENCRYPTED_PATH" "$$S3_PATH"
+        echo "noise_private.key.enc backed up to S3"
+UPLOAD_SCRIPT
   cat <<EOF
     depends_on:
-      vpc-server:
-        condition: service_healthy
+      noise-key-encrypt:
+        condition: service_completed_successfully
     networks:
       - project
 EOF

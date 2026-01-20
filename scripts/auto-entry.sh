@@ -78,11 +78,14 @@ if [ "${VPC_SERVER_ENABLED}" == "true" ] && [ -n "${LITESTREAM_S3_BUCKET}" ]; th
 
     # Restore noise_private.key (headscale server identity) from S3 if it exists
     # This is critical - without the same key, existing clients won't reconnect
+    # The key is encrypted with env_crypt_key (stable across redeployments based on app_id)
     # Only restore if the key doesn't already exist locally
     KEY_EXISTS=$(docker run --rm -v vpc_server_data:/var/lib/headscale "${DSTACK_CONTAINER_IMAGE_ID}" sh -c '[ -f /var/lib/headscale/noise_private.key ] && echo "yes" || echo "no"')
 
     if [ "$KEY_EXISTS" == "no" ]; then
-        echo "Checking for noise_private.key backup in S3..."
+        echo "Checking for encrypted noise_private.key backup in S3..."
+
+        # Step 1: Download encrypted key from S3
         docker run --rm \
             --entrypoint "" \
             -v vpc_server_data:/var/lib/headscale \
@@ -90,9 +93,40 @@ if [ "${VPC_SERVER_ENABLED}" == "true" ] && [ -n "${LITESTREAM_S3_BUCKET}" ]; th
             -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
             -e AWS_REGION="${AWS_REGION}" \
             amazon/aws-cli \
-            aws s3 cp "s3://${LITESTREAM_S3_BUCKET}/${LITESTREAM_S3_PATH}/noise_private.key" /var/lib/headscale/noise_private.key \
-            && echo "noise_private.key restored from S3" \
-            || echo "noise_private.key not found in S3 (first deployment or new key will be generated)"
+            aws s3 cp "s3://${LITESTREAM_S3_BUCKET}/${LITESTREAM_S3_PATH}/noise_private.key.enc" /var/lib/headscale/noise_private.key.enc \
+            && echo "Encrypted noise_private.key downloaded from S3" \
+            || echo "noise_private.key.enc not found in S3 (first deployment)"
+
+        # Step 2: Decrypt the key using env_crypt_key
+        ENC_EXISTS=$(docker run --rm -v vpc_server_data:/var/lib/headscale "${DSTACK_CONTAINER_IMAGE_ID}" sh -c '[ -f /var/lib/headscale/noise_private.key.enc ] && echo "yes" || echo "no"')
+
+        if [ "$ENC_EXISTS" == "yes" ]; then
+            echo "Decrypting noise_private.key with env_crypt_key..."
+            docker run --rm \
+                -v vpc_server_data:/var/lib/headscale \
+                -v /dstack/.host-shared:/host-shared:ro \
+                "${DSTACK_CONTAINER_IMAGE_ID}" \
+                sh -c '
+                    ENV_CRYPT_KEY=$(cat /host-shared/.appkeys.json | jq -r ".env_crypt_key")
+                    if [ -z "$ENV_CRYPT_KEY" ] || [ "$ENV_CRYPT_KEY" == "null" ]; then
+                        echo "ERROR: Could not get env_crypt_key from appkeys"
+                        exit 1
+                    fi
+                    openssl enc -aes-256-cbc -d -salt -pbkdf2 \
+                        -in /var/lib/headscale/noise_private.key.enc \
+                        -out /var/lib/headscale/noise_private.key \
+                        -pass pass:"$ENV_CRYPT_KEY"
+                    if [ -f /var/lib/headscale/noise_private.key ]; then
+                        echo "noise_private.key decrypted successfully"
+                        rm -f /var/lib/headscale/noise_private.key.enc
+                    else
+                        echo "ERROR: Decryption failed"
+                        exit 1
+                    fi
+                ' \
+                && echo "noise_private.key restored from S3" \
+                || echo "Failed to decrypt noise_private.key (key mismatch or corruption)"
+        fi
     else
         echo "noise_private.key already exists locally, skipping S3 restore"
     fi
