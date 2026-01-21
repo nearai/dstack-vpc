@@ -7,7 +7,6 @@ oci.tar
 
 # Rust build artifacts (service-mesh)
 service-mesh/.cargo/
-service-mesh/Cargo.lock
 service-mesh/vendor/
 
 # Documentation build artifacts
