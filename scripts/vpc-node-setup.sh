@@ -32,10 +32,18 @@ if [ "$VPC_SERVER_APP_ID" = "self" ]; then
     VPC_SERVER_APP_ID=$(echo "$INFO" | jq -r '.app_id // empty' 2>/dev/null)
 fi
 
+# Check if internal-only mode is enabled
+INTERNAL_ONLY_PARAM=""
+if [ "${VPC_INTERNAL_ONLY}" = "true" ] || [ "${VPC_INTERNAL_ONLY}" = "1" ]; then
+    INTERNAL_ONLY_PARAM="&internal_only=true"
+    log "Internal-only mode enabled - node will not have external internet access"
+fi
+
 log "Configuration:"
 log "  Node name: $NODE_NAME"
 log "  VPC Server app_id: $VPC_SERVER_APP_ID"
 log "  Mesh URL: $DSTACK_MESH_URL"
+log "  Internal-only: ${VPC_INTERNAL_ONLY:-false}"
 
 # Retry loop for registration
 attempt=0
@@ -49,7 +57,7 @@ while [ $attempt -lt $MAX_RETRIES ]; do
         --max-time 30 \
         -H "x-dstack-target-app: $VPC_SERVER_APP_ID" \
         -H "Host: vpc-server" \
-        "$DSTACK_MESH_URL/api/register?instance_id=$INSTANCE_ID&node_name=$NODE_NAME" 2>&1) || true
+        "$DSTACK_MESH_URL/api/register?instance_id=$INSTANCE_ID&node_name=$NODE_NAME$INTERNAL_ONLY_PARAM" 2>&1) || true
 
     # Check if we got a valid response
     if [ -n "$RESPONSE" ]; then

@@ -319,6 +319,7 @@ gen-vpc-client() {
       - NODE_NAME=${DSTACK_VPC_NODE_NAME}
       - VPC_SERVER_APP_ID=${DSTACK_VPC_SERVER_APP_ID}
       - DSTACK_MESH_URL=http://${MESH_CONTAINER_NAME}
+      - VPC_INTERNAL_ONLY=${DSTACK_VPC_INTERNAL_ONLY:-false}
     command: /scripts/vpc-node-setup.sh
     restart: "no"
     volumes:
