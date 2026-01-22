@@ -72,6 +72,15 @@ gen-vpc-server() {
       - project
 EOF
 
+  # Add dependency on litestream-restore if S3 backup is configured
+  if [ -n "$LITESTREAM_S3_BUCKET" ]; then
+    cat <<EOF
+    depends_on:
+      litestream-restore:
+        condition: service_completed_successfully
+EOF
+  fi
+
   # Check if HA mode is enabled
   if [ "${DSTACK_VPC_HA_MODE}" == "true" ]; then
     # HA mode: 2 API servers + nginx load balancer
@@ -164,6 +173,37 @@ EOF
   fi
 }
 
+gen-litestream-restore() {
+  # Only generate if VPC server is enabled and S3 bucket is configured
+  if [ "${DSTACK_VPC_SERVER_ENABLED}" != "true" ] || [ -z "$LITESTREAM_S3_BUCKET" ]; then
+    return
+  fi
+
+  # Set defaults (envsubst doesn't handle ${VAR:-default} syntax)
+  LITESTREAM_S3_PATH="${LITESTREAM_S3_PATH:-headscale}"
+  AWS_REGION="${AWS_REGION:-us-west-2}"
+
+  cat <<EOF
+  litestream-restore:
+    image: $DSTACK_CONTAINER_IMAGE_ID
+    container_name: litestream-restore
+    restart: "no"
+    labels:
+      com.datadoghq.ad.logs: '[{"source": "litestream", "service": "litestream-restore"}]'
+    environment:
+      - LITESTREAM_S3_BUCKET=$LITESTREAM_S3_BUCKET
+      - LITESTREAM_S3_PATH=$LITESTREAM_S3_PATH
+      - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+      - AWS_REGION=$AWS_REGION
+    volumes:
+      - vpc_server_data:/var/lib/headscale
+    command: sh -c 'envsubst < /configs/litestream.yml > /tmp/litestream.yml && if [ ! -f /var/lib/headscale/db.sqlite ]; then echo "No local database found, restoring from S3..." && litestream restore -if-replica-exists -config /tmp/litestream.yml /var/lib/headscale/db.sqlite; else echo "Local database exists, skipping restore"; fi'
+    networks:
+      - project
+EOF
+}
+
 gen-litestream() {
   # Only generate litestream sidecar if VPC server is enabled and S3 bucket is configured
   if [ "${DSTACK_VPC_SERVER_ENABLED}" != "true" ] || [ -z "$LITESTREAM_S3_BUCKET" ]; then
@@ -242,7 +282,7 @@ EOF
 
         # Get env_crypt_key from appkeys (stable across redeployments based on app_id)
         ENV_CRYPT_KEY=$$(cat /host-shared/.appkeys.json | jq -r '.env_crypt_key')
-        if [ -z "$$ENV_CRYPT_KEY" ] || [ "$$ENV_CRYPT_KEY" == "null" ]; then
+        if [ -z "$$ENV_CRYPT_KEY" ] || [ "$$ENV_CRYPT_KEY" = "null" ]; then
           echo "ERROR: Could not get env_crypt_key from appkeys"
           exit 1
         fi
@@ -361,6 +401,7 @@ EOF
 cat <<EOF
 services:
 $(gen-dstack-mesh)
+$(gen-litestream-restore)
 $(gen-vpc-server)
 $(gen-litestream)
 $(gen-noise-key-backup)
@@ -369,8 +410,11 @@ volumes:
   vpc_server_data:
     name: vpc_server_data
   vpc_api_server_data:
+    name: vpc_api_server_data
   vpc_shared:
+    name: vpc_shared
   vpc_node_data:
+    name: vpc_node_data
 networks:
   project:
     name: ${DSTACK_CONTAINER_NETWORK}
