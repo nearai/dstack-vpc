@@ -101,6 +101,11 @@ EOF
       - /var/run/docker.sock:/var/run/docker.sock
       - vpc_api_server_data:/data
     command: /scripts/vpc-server-entry.sh
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     depends_on:
       - vpc-server
     networks:
@@ -121,6 +126,11 @@ EOF
       - /var/run/docker.sock:/var/run/docker.sock
       - vpc_api_server_data:/data
     command: /scripts/vpc-server-entry.sh
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     depends_on:
       - vpc-server
     networks:
@@ -165,6 +175,11 @@ EOF
       - /var/run/docker.sock:/var/run/docker.sock
       - vpc_api_server_data:/data
     command: /scripts/vpc-server-entry.sh
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8000/health"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
     depends_on:
       - vpc-server
     networks:
@@ -346,6 +361,116 @@ UPLOAD_SCRIPT
 EOF
 }
 
+gen-shared-key-backup() {
+  # Only generate if VPC server is enabled and S3 bucket is configured
+  if [ "${DSTACK_VPC_SERVER_ENABLED}" != "true" ] || [ -z "$LITESTREAM_S3_BUCKET" ]; then
+    return
+  fi
+
+  # Set defaults
+  LITESTREAM_S3_PATH="${LITESTREAM_S3_PATH:-headscale}"
+  AWS_REGION="${AWS_REGION:-us-west-2}"
+
+  # Determine which service to depend on (HA mode uses vpc-api-lb, non-HA uses vpc-api-server)
+  if [ "${DSTACK_VPC_HA_MODE}" == "true" ]; then
+    SHARED_KEY_API_DEP="vpc-api-lb"
+  else
+    SHARED_KEY_API_DEP="$VPC_API_SERVER_CONTAINER_NAME"
+  fi
+
+  # Step 1: Encrypt the shared key using dstack image (has openssl/jq)
+  cat <<EOF
+  shared-key-encrypt:
+    image: $DSTACK_CONTAINER_IMAGE_ID
+    container_name: shared-key-encrypt
+    restart: "no"
+    labels:
+      com.datadoghq.ad.logs: '[{"source": "shared-key-encrypt", "service": "shared-key-encrypt"}]'
+    volumes:
+      - vpc_api_server_data:/data
+      - /dstack/.host-shared:/host-shared:ro
+    command:
+      - sh
+      - -c
+      - |
+        KEY_PATH=/data/shared_key
+        ENCRYPTED_PATH=/data/shared_key.enc
+
+        echo "Preparing to encrypt shared_key..."
+EOF
+  cat <<'ENCRYPT_SCRIPT'
+        # Wait for vpc-api-server to generate the key
+        if [ ! -f "$$KEY_PATH" ]; then
+          echo "shared_key not found, waiting for vpc-api-server to generate it..."
+          exit 1
+        fi
+
+        # Get env_crypt_key from appkeys (stable across redeployments based on app_id)
+        ENV_CRYPT_KEY=$$(cat /host-shared/.appkeys.json | jq -r '.env_crypt_key')
+        if [ -z "$$ENV_CRYPT_KEY" ] || [ "$$ENV_CRYPT_KEY" = "null" ]; then
+          echo "ERROR: Could not get env_crypt_key from appkeys"
+          exit 1
+        fi
+
+        # Always encrypt the current key (will be uploaded to S3 to keep backup in sync)
+        echo "Encrypting shared_key with env_crypt_key..."
+        openssl enc -aes-256-cbc -salt -pbkdf2 -in "$$KEY_PATH" -out "$$ENCRYPTED_PATH" -pass pass:"$$ENV_CRYPT_KEY"
+
+        if [ -f "$$ENCRYPTED_PATH" ]; then
+          echo "shared_key encrypted successfully"
+        else
+          echo "ERROR: Encryption failed"
+          exit 1
+        fi
+ENCRYPT_SCRIPT
+  cat <<EOF
+    depends_on:
+      $SHARED_KEY_API_DEP:
+        condition: service_healthy
+    networks:
+      - project
+
+  shared-key-upload:
+    image: amazon/aws-cli
+    container_name: shared-key-upload
+    restart: "no"
+    entrypoint: [""]
+    labels:
+      com.datadoghq.ad.logs: '[{"source": "shared-key-upload", "service": "shared-key-upload"}]'
+    environment:
+      - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+      - AWS_REGION=$AWS_REGION
+    volumes:
+      - vpc_api_server_data:/data:ro
+    command:
+      - sh
+      - -c
+      - |
+        ENCRYPTED_PATH=/data/shared_key.enc
+        S3_PATH=s3://$LITESTREAM_S3_BUCKET/$LITESTREAM_S3_PATH/shared_key.enc
+
+        echo "Uploading encrypted shared_key to S3..."
+EOF
+  cat <<'UPLOAD_SCRIPT'
+        if [ ! -f "$$ENCRYPTED_PATH" ]; then
+          echo "shared_key.enc not found locally (encryption may have failed)"
+          exit 1
+        fi
+
+        # Always upload to keep S3 backup in sync with current key
+        aws s3 cp "$$ENCRYPTED_PATH" "$$S3_PATH"
+        echo "shared_key.enc backed up to S3"
+UPLOAD_SCRIPT
+  cat <<EOF
+    depends_on:
+      shared-key-encrypt:
+        condition: service_completed_successfully
+    networks:
+      - project
+EOF
+}
+
 gen-vpc-client() {
   if [ -z "${DSTACK_VPC_NODE_NAME}" ]; then
     return
@@ -405,16 +530,17 @@ $(gen-litestream-restore)
 $(gen-vpc-server)
 $(gen-litestream)
 $(gen-noise-key-backup)
+$(gen-shared-key-backup)
 $(gen-vpc-client)
 volumes:
   vpc_server_data:
-    name: vpc_server_data
+    name: dstack-service_vpc_server_data
   vpc_api_server_data:
-    name: vpc_api_server_data
+    name: dstack-service_vpc_api_server_data
   vpc_shared:
-    name: vpc_shared
+    name: dstack-service_vpc_shared
   vpc_node_data:
-    name: vpc_node_data
+    name: dstack_vpc_node_data
 networks:
   project:
     name: ${DSTACK_CONTAINER_NETWORK}

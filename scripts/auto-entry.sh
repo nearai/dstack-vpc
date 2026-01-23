@@ -58,14 +58,14 @@ if [ "${VPC_SERVER_ENABLED}" == "true" ] && [ -n "${LITESTREAM_S3_BUCKET}" ]; th
     export AWS_REGION="${AWS_REGION:-us-west-2}"
 
     # Create the headscale data volume if it doesn't exist
-    docker volume create vpc_server_data 2>/dev/null || true
+    docker volume create dstack-service_vpc_server_data 2>/dev/null || true
 
     # Run litestream restore in a temporary container
     # -if-replica-exists: only restore if S3 backup exists, otherwise continue
     # This runs BEFORE docker compose up, so headscale will see the restored DB
     echo "Running litestream restore from S3..."
     docker run --rm \
-        -v vpc_server_data:/var/lib/headscale \
+        -v dstack-service_vpc_server_data:/var/lib/headscale \
         -e LITESTREAM_S3_BUCKET="${LITESTREAM_S3_BUCKET}" \
         -e LITESTREAM_S3_PATH="${LITESTREAM_S3_PATH}" \
         -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
@@ -80,7 +80,7 @@ if [ "${VPC_SERVER_ENABLED}" == "true" ] && [ -n "${LITESTREAM_S3_BUCKET}" ]; th
     # This is critical - without the same key, existing clients won't reconnect
     # The key is encrypted with env_crypt_key (stable across redeployments based on app_id)
     # Only restore if the key doesn't already exist locally
-    KEY_EXISTS=$(docker run --rm -v vpc_server_data:/var/lib/headscale "${DSTACK_CONTAINER_IMAGE_ID}" sh -c '[ -f /var/lib/headscale/noise_private.key ] && echo "yes" || echo "no"')
+    KEY_EXISTS=$(docker run --rm -v dstack-service_vpc_server_data:/var/lib/headscale "${DSTACK_CONTAINER_IMAGE_ID}" sh -c '[ -f /var/lib/headscale/noise_private.key ] && echo "yes" || echo "no"')
 
     if [ "$KEY_EXISTS" == "no" ]; then
         echo "Checking for encrypted noise_private.key backup in S3..."
@@ -88,7 +88,7 @@ if [ "${VPC_SERVER_ENABLED}" == "true" ] && [ -n "${LITESTREAM_S3_BUCKET}" ]; th
         # Step 1: Download encrypted key from S3
         docker run --rm \
             --entrypoint "" \
-            -v vpc_server_data:/var/lib/headscale \
+            -v dstack-service_vpc_server_data:/var/lib/headscale \
             -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
             -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
             -e AWS_REGION="${AWS_REGION}" \
@@ -98,12 +98,12 @@ if [ "${VPC_SERVER_ENABLED}" == "true" ] && [ -n "${LITESTREAM_S3_BUCKET}" ]; th
             || echo "noise_private.key.enc not found in S3 (first deployment)"
 
         # Step 2: Decrypt the key using env_crypt_key
-        ENC_EXISTS=$(docker run --rm -v vpc_server_data:/var/lib/headscale "${DSTACK_CONTAINER_IMAGE_ID}" sh -c '[ -f /var/lib/headscale/noise_private.key.enc ] && echo "yes" || echo "no"')
+        ENC_EXISTS=$(docker run --rm -v dstack-service_vpc_server_data:/var/lib/headscale "${DSTACK_CONTAINER_IMAGE_ID}" sh -c '[ -f /var/lib/headscale/noise_private.key.enc ] && echo "yes" || echo "no"')
 
         if [ "$ENC_EXISTS" == "yes" ]; then
             echo "Decrypting noise_private.key with env_crypt_key..."
             docker run --rm \
-                -v vpc_server_data:/var/lib/headscale \
+                -v dstack-service_vpc_server_data:/var/lib/headscale \
                 -v /dstack/.host-shared:/host-shared:ro \
                 "${DSTACK_CONTAINER_IMAGE_ID}" \
                 sh -c '
@@ -129,6 +129,62 @@ if [ "${VPC_SERVER_ENABLED}" == "true" ] && [ -n "${LITESTREAM_S3_BUCKET}" ]; th
         fi
     else
         echo "noise_private.key already exists locally, skipping S3 restore"
+    fi
+
+    # Restore shared_key for vpc-api-server (used to derive shared secrets like postgres passwords)
+    # This is critical - without the same key, services will have password mismatches
+    # Create the vpc_api_server_data volume if it doesn't exist (use prefixed name for backward compatibility)
+    docker volume create dstack-service_vpc_api_server_data 2>/dev/null || true
+
+    SHARED_KEY_EXISTS=$(docker run --rm -v dstack-service_vpc_api_server_data:/data "${DSTACK_CONTAINER_IMAGE_ID}" sh -c '[ -f /data/shared_key ] && echo "yes" || echo "no"')
+
+    if [ "$SHARED_KEY_EXISTS" == "no" ]; then
+        echo "Checking for encrypted shared_key backup in S3..."
+
+        # Step 1: Download encrypted key from S3
+        docker run --rm \
+            --entrypoint "" \
+            -v dstack-service_vpc_api_server_data:/data \
+            -e AWS_ACCESS_KEY_ID="${AWS_ACCESS_KEY_ID}" \
+            -e AWS_SECRET_ACCESS_KEY="${AWS_SECRET_ACCESS_KEY}" \
+            -e AWS_REGION="${AWS_REGION}" \
+            amazon/aws-cli \
+            aws s3 cp "s3://${LITESTREAM_S3_BUCKET}/${LITESTREAM_S3_PATH}/shared_key.enc" /data/shared_key.enc \
+            && echo "Encrypted shared_key downloaded from S3" \
+            || echo "shared_key.enc not found in S3 (first deployment)"
+
+        # Step 2: Decrypt the key using env_crypt_key
+        ENC_EXISTS=$(docker run --rm -v dstack-service_vpc_api_server_data:/data "${DSTACK_CONTAINER_IMAGE_ID}" sh -c '[ -f /data/shared_key.enc ] && echo "yes" || echo "no"')
+
+        if [ "$ENC_EXISTS" == "yes" ]; then
+            echo "Decrypting shared_key with env_crypt_key..."
+            docker run --rm \
+                -v dstack-service_vpc_api_server_data:/data \
+                -v /dstack/.host-shared:/host-shared:ro \
+                "${DSTACK_CONTAINER_IMAGE_ID}" \
+                sh -c '
+                    ENV_CRYPT_KEY=$(cat /host-shared/.appkeys.json | jq -r ".env_crypt_key")
+                    if [ -z "$ENV_CRYPT_KEY" ] || [ "$ENV_CRYPT_KEY" == "null" ]; then
+                        echo "ERROR: Could not get env_crypt_key from appkeys"
+                        exit 1
+                    fi
+                    openssl enc -aes-256-cbc -d -salt -pbkdf2 \
+                        -in /data/shared_key.enc \
+                        -out /data/shared_key \
+                        -pass pass:"$ENV_CRYPT_KEY"
+                    if [ -f /data/shared_key ]; then
+                        echo "shared_key decrypted successfully"
+                        rm -f /data/shared_key.enc
+                    else
+                        echo "ERROR: Decryption failed"
+                        exit 1
+                    fi
+                ' \
+                && echo "shared_key restored from S3" \
+                || echo "Failed to decrypt shared_key (key mismatch or corruption)"
+        fi
+    else
+        echo "shared_key already exists locally, skipping S3 restore"
     fi
 fi
 
