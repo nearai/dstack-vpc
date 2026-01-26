@@ -219,6 +219,7 @@ docker run -d \
 **Optional Environment Variables:**
 - `VPC_SERVER_APP_ID`: Server's app ID (default: `self` for auto-detection)
 - `VPC_NODE_TYPE`: Service type for discovery (e.g., `mongodb`, `etcd`)
+- `VPC_INTERNAL_ONLY`: Set to `true` to restrict node to internal VPC access only (no external internet access) (default: `false`)
 
 ## Configuration
 
@@ -283,8 +284,13 @@ database:
 
 #### Register Node
 ```http
-GET /api/register?instance_id={uuid}&node_name={name}
+GET /api/register?instance_id={uuid}&node_name={name}&internal_only={true|false}
 Headers: x-dstack-app-id: {app_id}
+
+Query Parameters:
+- instance_id (required): Unique instance identifier
+- node_name (optional): Human-readable node name
+- internal_only (optional): Set to "true" to restrict node to internal VPC access only (default: "false")
 
 Response:
 {
@@ -365,6 +371,66 @@ Certificates are generated via the DStack TEE `dstack.sock` API:
 - **VPC Server**: `ALLOWED_APPS` controls node registration
 - **Service Mesh**: Validates app_id on every mTLS connection
 - **Backend Services**: Receive authenticated app_id for authorization
+
+### Internal-Only Network Access
+
+DStack VPC supports restricting nodes to internal-only network access, preventing them from making external internet requests while still allowing communication within the VPC.
+
+**How it works:**
+- Nodes with `VPC_INTERNAL_ONLY=true` are tagged with `tag:internal-only` in Headscale
+- Headscale ACL policies restrict these nodes to only communicate within the VPC subnet (`100.128.0.0/10`)
+- Nodes without this flag are tagged with `tag:external-allowed` and can access both VPC and external networks
+
+**Configuration:**
+
+```bash
+# Run node with internal-only access
+docker run -d \
+  -e VPC_NODE_NAME=internal-node \
+  -e VPC_SERVER_APP_ID=server-app-id \
+  -e VPC_INTERNAL_ONLY=true \
+  -e MESH_BACKEND=127.0.0.1:27017 \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  --privileged \
+  nearaidev/dstack-service
+```
+
+**ACL Policies:**
+
+The ACL policies are defined in `configs/headscale_config.yaml`:
+
+```yaml
+acls:
+  # Internal-only nodes can only reach VPC
+  - action: accept
+    src:
+      - "tag:internal-only"
+    dst:
+      - "100.128.0.0/10:*"
+  
+  # External-allowed nodes can reach both VPC and external
+  - action: accept
+    src:
+      - "tag:external-allowed"
+    dst:
+      - "*:*"
+```
+
+**Testing:**
+
+```bash
+# On an internal-only node, these should work:
+curl http://other-node.dstack.internal:27017
+
+# These should fail (blocked by ACL):
+curl https://google.com
+curl https://8.8.8.8
+```
+
+**Use Cases:**
+- Database nodes that should only accept connections from application nodes
+- Sensitive services that must not leak data externally
+- Compliance requirements for air-gapped or isolated workloads
 
 ## Troubleshooting
 
