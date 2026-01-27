@@ -285,7 +285,7 @@ func generatePreAuthKey() (string, error) {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	log.Printf("Pre-auth key API response: %s", string(body))
+	log.Printf("Successfully created pre-auth key.")
 
 	var keyResp PreAuthKeyResponse
 	if err := json.Unmarshal(body, &keyResp); err != nil {
