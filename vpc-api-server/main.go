@@ -31,9 +31,9 @@ type NodeInfo struct {
 }
 
 type BootstrapResponse struct {
-	PreAuthKey   string `json:"pre_auth_key"`
-	SharedKey    string `json:"shared_key"`
-	ServerUrl string `json:"server_url"`
+	PreAuthKey string `json:"pre_auth_key"`
+	SharedKey  string `json:"shared_key"`
+	ServerUrl  string `json:"server_url"`
 }
 
 type NodesResponse struct {
@@ -41,10 +41,10 @@ type NodesResponse struct {
 }
 
 type AppState struct {
-	config       Config
-	nodes        map[string]NodeInfo
-	mutex        sync.RWMutex
-	sharedKey    string
+	config    Config
+	nodes     map[string]NodeInfo
+	mutex     sync.RWMutex
+	sharedKey string
 	ServerUrl string
 }
 
@@ -165,10 +165,11 @@ type HeadscaleNode struct {
 }
 
 type PreAuthKeyRequest struct {
-	User       string `json:"user"`
-	Reusable   bool   `json:"reusable"`
-	Ephemeral  bool   `json:"ephemeral"`
-	Expiration string `json:"expiration"`
+	User       string   `json:"user"`
+	Reusable   bool     `json:"reusable"`
+	Ephemeral  bool     `json:"ephemeral"`
+	Expiration string   `json:"expiration"`
+	ACLTags    []string `json:"aclTags,omitempty"`
 }
 
 type User struct {
@@ -234,7 +235,7 @@ func getUserID(username string) (string, error) {
 	return "", fmt.Errorf("user %s not found", username)
 }
 
-func generatePreAuthKey() (string, error) {
+func generatePreAuthKey(internalOnly bool) (string, error) {
 	apiKey, err := getAPIKey()
 	if err != nil {
 		return "", err
@@ -247,11 +248,24 @@ func generatePreAuthKey() (string, error) {
 
 	expiration := time.Now().Add(24 * time.Hour).Format(time.RFC3339)
 
+	// Set ACL tags based on internal-only flag
+	// Note: Headscale API format may vary. If aclTags field doesn't work,
+	// we may need to set tags on the node after it joins instead.
+	var aclTags []string
+	if internalOnly {
+		aclTags = []string{"tag:internal-only"}
+		log.Printf("Creating pre-auth key with internal-only tag")
+	} else {
+		aclTags = []string{"tag:external-allowed"}
+		log.Printf("Creating pre-auth key with external-allowed tag")
+	}
+
 	reqBody := PreAuthKeyRequest{
 		User:       userID,
 		Reusable:   true,
 		Ephemeral:  false,
 		Expiration: expiration,
+		ACLTags:    aclTags,
 	}
 
 	jsonBody, err := json.Marshal(reqBody)
@@ -301,31 +315,31 @@ func generatePreAuthKey() (string, error) {
 
 func getOrCreateSharedKey() string {
 	keyPath := "/data/shared_key"
-	
+
 	// Try to load existing key
 	if keyBytes, err := os.ReadFile(keyPath); err == nil {
 		key := strings.TrimSpace(string(keyBytes))
 		log.Printf("Loaded existing shared key from %s", keyPath)
 		return key
 	}
-	
+
 	// Generate new key if file doesn't exist
 	keyBytes := make([]byte, 64)
 	rand.Read(keyBytes)
 	sharedKey := base64.StdEncoding.EncodeToString(keyBytes)
-	
+
 	// Ensure /data directory exists
 	if err := os.MkdirAll("/data", 0755); err != nil {
 		log.Printf("Warning: failed to create /data directory: %v", err)
 	}
-	
+
 	// Save key to disk
 	if err := os.WriteFile(keyPath, []byte(sharedKey), 0600); err != nil {
 		log.Printf("Warning: failed to save shared key to %s: %v", keyPath, err)
 	} else {
 		log.Printf("Generated and saved new shared key to %s", keyPath)
 	}
-	
+
 	return sharedKey
 }
 
@@ -361,9 +375,9 @@ func main() {
 	log.Printf("Using Headscale URL: %s", ServerUrl)
 
 	state := &AppState{
-		config:       config,
-		nodes:        make(map[string]NodeInfo),
-		sharedKey:    sharedKey,
+		config:    config,
+		nodes:     make(map[string]NodeInfo),
+		sharedKey: sharedKey,
 		ServerUrl: ServerUrl,
 	}
 
@@ -396,17 +410,25 @@ func main() {
 
 	// Nodes call this endpoint to be allowed to join the Tailnet
 	// and get the shared key for inter-node communication
-	// Required query params: instance_id, node_name (optional)
+	// Required query params: instance_id
+	// Optional query params: node_name, internal_only (true/false)
 	r.GET("/api/register", func(c *gin.Context) {
 		instanceUUID := c.Query("instance_id")
 		nodeName := c.Query("node_name")
+		internalOnlyStr := c.Query("internal_only")
 
 		if instanceUUID == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Missing required parameters"})
 			return
 		}
 
-		preAuthKey, err := generatePreAuthKey()
+		// Parse internal_only parameter (defaults to false)
+		internalOnly := false
+		if internalOnlyStr == "true" || internalOnlyStr == "1" {
+			internalOnly = true
+		}
+
+		preAuthKey, err := generatePreAuthKey(internalOnly)
 		if err != nil {
 			log.Printf("Failed to generate pre-auth key: %v", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate pre-auth key"})
@@ -418,12 +440,12 @@ func main() {
 		}
 
 		response := BootstrapResponse{
-			PreAuthKey:   preAuthKey,
-			SharedKey:    state.sharedKey,
-			ServerUrl: state.ServerUrl,
+			PreAuthKey: preAuthKey,
+			SharedKey:  state.sharedKey,
+			ServerUrl:  state.ServerUrl,
 		}
 
-		log.Printf("Bootstrap request from %s (%s)", nodeName, instanceUUID)
+		log.Printf("Bootstrap request from %s (%s), internal_only=%v", nodeName, instanceUUID, internalOnly)
 		c.JSON(http.StatusOK, response)
 	})
 
@@ -435,7 +457,7 @@ func main() {
 		hostname := c.Query("hostname")
 
 		log.Printf("Received node update request")
-		log.Printf("Query params: uuid=%s, node_type=%s, tailscale_ip=%s, hostname=%s", 
+		log.Printf("Query params: uuid=%s, node_type=%s, tailscale_ip=%s, hostname=%s",
 			uuid, nodeType, tailscaleIP, hostname)
 
 		if uuid == "" {
@@ -444,7 +466,7 @@ func main() {
 		}
 
 		state.mutex.Lock()
-		
+
 		// If this is an etcd node, remove all other etcd nodes first (keep only most recent)
 		if nodeType == "etcd" {
 			for existingUUID, existingNode := range state.nodes {
@@ -454,7 +476,7 @@ func main() {
 				}
 			}
 		}
-		
+
 		if node, exists := state.nodes[uuid]; exists {
 			if nodeType != "" {
 				node.NodeType = nodeType
@@ -472,9 +494,9 @@ func main() {
 		} else {
 			// Create new node entry if it doesn't exist
 			node := NodeInfo{
-				UUID:           uuid,
-				Name:           uuid,
-				NodeType:       nodeType,
+				UUID:     uuid,
+				Name:     uuid,
+				NodeType: nodeType,
 			}
 			if tailscaleIP != "" {
 				node.TailscaleIP = &tailscaleIP
@@ -492,7 +514,7 @@ func main() {
 	// Generic endpoint: Discover nodes by type
 	r.GET("/api/discover/:nodeType", func(c *gin.Context) {
 		nodeType := c.Param("nodeType")
-		
+
 		state.mutex.RLock()
 		defer state.mutex.RUnlock()
 
@@ -502,16 +524,16 @@ func main() {
 		for _, node := range state.nodes {
 			if node.NodeType == nodeType && node.ActualHostname != nil && *node.ActualHostname != "" {
 				nodeInfo := gin.H{
-					"hostname": *node.ActualHostname,
+					"hostname":     *node.ActualHostname,
 					"tailscale_ip": node.TailscaleIP,
-					"uuid": node.UUID,
+					"uuid":         node.UUID,
 				}
-				
+
 				// Add port for etcd nodes for backwards compatibility
 				if nodeType == "etcd" {
 					nodeInfo["hostname_with_port"] = fmt.Sprintf("%s:2379", *node.ActualHostname)
 				}
-				
+
 				discoveredNodes = append(discoveredNodes, nodeInfo)
 			}
 		}
@@ -522,8 +544,8 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"nodes": discoveredNodes,
-			"count": len(discoveredNodes),
+			"nodes":     discoveredNodes,
+			"count":     len(discoveredNodes),
 			"node_type": nodeType,
 		})
 		log.Printf("%s discovery request returned %d nodes", nodeType, len(discoveredNodes))

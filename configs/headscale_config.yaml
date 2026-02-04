@@ -37,3 +37,36 @@ dns:
 
 unix_socket: /var/run/headscale/headscale.sock
 unix_socket_permission: "0770"
+
+# ACL policies for network access control
+# Internal-only nodes can only communicate within the VPC
+# External-allowed nodes can access both VPC and external networks
+acls:
+  # Allow internal-only nodes to only reach VPC subnet
+  - action: accept
+    src:
+      - "tag:internal-only"
+    dst:
+      - "100.128.0.0/10:*"
+  
+  # Allow external-allowed nodes to reach VPC subnet
+  - action: accept
+    src:
+      - "tag:external-allowed"
+    dst:
+      - "100.128.0.0/10:*"
+  
+  # Allow external-allowed nodes to reach external networks (via exit nodes if configured)
+  # Note: This allows routing to external IPs, but actual external access depends on exit node configuration
+  - action: accept
+    src:
+      - "tag:external-allowed"
+    dst:
+      - "*:*"
+  
+  # Default: Allow all nodes to communicate within VPC (for backwards compatibility)
+  - action: accept
+    src:
+      - "100.128.0.0/10"
+    dst:
+      - "100.128.0.0/10:*"
