@@ -76,7 +76,7 @@ impl AsyncRead for ReqwestStreamReader {
                     // Continue loop to read from the new chunk
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, e)));
+                    return Poll::Ready(Err(std::io::Error::other(e)));
                 }
                 Poll::Ready(None) => {
                     // End of stream

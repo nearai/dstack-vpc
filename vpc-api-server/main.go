@@ -32,9 +32,9 @@ type NodeInfo struct {
 }
 
 type BootstrapResponse struct {
-	PreAuthKey   string `json:"pre_auth_key"`
-	SharedKey    string `json:"shared_key"`
-	ServerUrl string `json:"server_url"`
+	PreAuthKey string `json:"pre_auth_key"`
+	SharedKey  string `json:"shared_key"`
+	ServerUrl  string `json:"server_url"`
 }
 
 type NodesResponse struct {
@@ -42,10 +42,10 @@ type NodesResponse struct {
 }
 
 type AppState struct {
-	config       Config
-	nodes        map[string]NodeInfo
-	mutex        sync.RWMutex
-	sharedKey    string
+	config    Config
+	nodes     map[string]NodeInfo
+	mutex     sync.RWMutex
+	sharedKey string
 	ServerUrl string
 }
 
@@ -302,31 +302,31 @@ func generatePreAuthKey() (string, error) {
 
 func getOrCreateSharedKey() string {
 	keyPath := "/data/shared_key"
-	
+
 	// Try to load existing key
 	if keyBytes, err := os.ReadFile(keyPath); err == nil {
 		key := strings.TrimSpace(string(keyBytes))
 		slog.Info("Loaded existing shared key", "path", keyPath)
 		return key
 	}
-	
+
 	// Generate new key if file doesn't exist
 	keyBytes := make([]byte, 64)
 	rand.Read(keyBytes)
 	sharedKey := base64.StdEncoding.EncodeToString(keyBytes)
-	
+
 	// Ensure /data directory exists
 	if err := os.MkdirAll("/data", 0755); err != nil {
 		slog.Warn("Failed to create /data directory", "error", err)
 	}
-	
+
 	// Save key to disk
 	if err := os.WriteFile(keyPath, []byte(sharedKey), 0600); err != nil {
 		slog.Warn("Failed to save shared key", "path", keyPath, "error", err)
 	} else {
 		slog.Info("Generated and saved new shared key", "path", keyPath)
 	}
-	
+
 	return sharedKey
 }
 
@@ -365,9 +365,9 @@ func main() {
 	slog.Info("Using Headscale URL", "url", ServerUrl)
 
 	state := &AppState{
-		config:       config,
-		nodes:        make(map[string]NodeInfo),
-		sharedKey:    sharedKey,
+		config:    config,
+		nodes:     make(map[string]NodeInfo),
+		sharedKey: sharedKey,
 		ServerUrl: ServerUrl,
 	}
 
@@ -422,9 +422,9 @@ func main() {
 		}
 
 		response := BootstrapResponse{
-			PreAuthKey:   preAuthKey,
-			SharedKey:    state.sharedKey,
-			ServerUrl: state.ServerUrl,
+			PreAuthKey: preAuthKey,
+			SharedKey:  state.sharedKey,
+			ServerUrl:  state.ServerUrl,
 		}
 
 		slog.Info("Bootstrap request", "node_name", nodeName, "instance_id", instanceUUID)
@@ -438,14 +438,13 @@ func main() {
 		tailscaleIP := c.Query("tailscale_ip")
 		hostname := c.Query("hostname")
 
-
 		if uuid == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "uuid parameter is required"})
 			return
 		}
 
 		state.mutex.Lock()
-		
+
 		// If this is an etcd node, remove all other etcd nodes first (keep only most recent)
 		if nodeType == "etcd" {
 			for existingUUID, existingNode := range state.nodes {
@@ -455,7 +454,7 @@ func main() {
 				}
 			}
 		}
-		
+
 		if node, exists := state.nodes[uuid]; exists {
 			if nodeType != "" {
 				node.NodeType = nodeType
@@ -473,9 +472,9 @@ func main() {
 		} else {
 			// Create new node entry if it doesn't exist
 			node := NodeInfo{
-				UUID:           uuid,
-				Name:           uuid,
-				NodeType:       nodeType,
+				UUID:     uuid,
+				Name:     uuid,
+				NodeType: nodeType,
 			}
 			if tailscaleIP != "" {
 				node.TailscaleIP = &tailscaleIP
@@ -493,7 +492,7 @@ func main() {
 	// Generic endpoint: Discover nodes by type
 	r.GET("/api/discover/:nodeType", func(c *gin.Context) {
 		nodeType := c.Param("nodeType")
-		
+
 		state.mutex.RLock()
 		defer state.mutex.RUnlock()
 
@@ -503,16 +502,16 @@ func main() {
 		for _, node := range state.nodes {
 			if node.NodeType == nodeType && node.ActualHostname != nil && *node.ActualHostname != "" {
 				nodeInfo := gin.H{
-					"hostname": *node.ActualHostname,
+					"hostname":     *node.ActualHostname,
 					"tailscale_ip": node.TailscaleIP,
-					"uuid": node.UUID,
+					"uuid":         node.UUID,
 				}
-				
+
 				// Add port for etcd nodes for backwards compatibility
 				if nodeType == "etcd" {
 					nodeInfo["hostname_with_port"] = fmt.Sprintf("%s:2379", *node.ActualHostname)
 				}
-				
+
 				discoveredNodes = append(discoveredNodes, nodeInfo)
 			}
 		}
@@ -523,8 +522,8 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"nodes": discoveredNodes,
-			"count": len(discoveredNodes),
+			"nodes":     discoveredNodes,
+			"count":     len(discoveredNodes),
 			"node_type": nodeType,
 		})
 	})
