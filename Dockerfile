@@ -10,8 +10,6 @@ RUN cargo build --target x86_64-unknown-linux-musl
 FROM golang:1.23-alpine@sha256:383395b794dffa5b53012a212365d40c8e37109a626ca30d6151c8348d380b5f AS go-builder
 WORKDIR /build
 COPY vpc-api-server/ /build/
-RUN go mod init vpc-api-server || true
-RUN go get github.com/gin-gonic/gin
 RUN CGO_ENABLED=0 GOOS=linux go build -a -o vpc-api-server main.go
 
 
