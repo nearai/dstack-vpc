@@ -373,7 +373,8 @@ func main() {
 
 	slog.Info("API server starting", "allowed_apps", config.AllowedApps)
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.Recovery())
 
 	r.Use(func(c *gin.Context) {
 		// Skip auth for health check endpoints
