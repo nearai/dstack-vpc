@@ -434,9 +434,6 @@ func main() {
 		tailscaleIP := c.Query("tailscale_ip")
 		hostname := c.Query("hostname")
 
-		log.Printf("Received node update request")
-		log.Printf("Query params: uuid=%s, node_type=%s, tailscale_ip=%s, hostname=%s", 
-			uuid, nodeType, tailscaleIP, hostname)
 
 		if uuid == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "uuid parameter is required"})
@@ -526,7 +523,6 @@ func main() {
 			"count": len(discoveredNodes),
 			"node_type": nodeType,
 		})
-		log.Printf("%s discovery request returned %d nodes", nodeType, len(discoveredNodes))
 	})
 
 	// New endpoint: List all nodes (for debugging)

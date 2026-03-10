@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use config::{load_config_figment, Config};
 use tracing::info;
+use tracing_subscriber;
 
 mod client;
 mod config;
@@ -31,7 +32,10 @@ struct Args {
 async fn main() -> Result<()> {
     // Initialize tracing with config
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
 
     let args = Args::parse();

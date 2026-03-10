@@ -6,7 +6,7 @@ use rocket::request::{FromRequest, Outcome};
 use rocket::response::Responder;
 use rocket::response::Response;
 use rocket::{get, routes, Request};
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 /// Custom responder that returns status with headers
 pub struct AuthSuccessResponse {
@@ -66,7 +66,7 @@ async fn auth_handler(headers: AuthHeaders) -> Result<AuthSuccessResponse, Statu
     // Parse and verify certificate
     match parse_and_verify_cert(cert_pem).await {
         Ok(app_id) => {
-            info!("Auth successful for app_id: {app_id}");
+            debug!("Auth successful for app_id: {app_id}");
             Ok(AuthSuccessResponse { app_id })
         }
         Err(e) => {
