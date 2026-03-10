@@ -17,7 +17,7 @@ anyhow = "1.0"
 clap = { version = "4.0", features = ["derive", "env"] }
 
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 load_config = { git = "https://github.com/Dstack-TEE/dstack.git" }
 ra-tls = { git = "https://github.com/Dstack-TEE/dstack.git" }
