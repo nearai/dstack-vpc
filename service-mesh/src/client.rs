@@ -76,7 +76,7 @@ impl AsyncRead for ReqwestStreamReader {
                     // Continue loop to read from the new chunk
                 }
                 Poll::Ready(Some(Err(e))) => {
-                    return Poll::Ready(Err(std::io::Error::new(std::io::ErrorKind::Other, e)));
+                    return Poll::Ready(Err(std::io::Error::other(e)));
                 }
                 Poll::Ready(None) => {
                     // End of stream
@@ -480,12 +480,10 @@ async fn proxy_request(
         }
     }
 
-    info!(
+    debug!(
         "Proxying request to app_id '{}' at URL: {}",
         target.app_id, url
     );
-    info!("Full request headers: {:?}", request.all_headers);
-    dbg!(&request_builder);
 
     // Execute request
     match request_builder.send().await {
@@ -573,8 +571,7 @@ fn validate_connection_target(target: &TargetInfo) -> Result<(), Status> {
             target.app_id
         );
     }
-    // Log connection attempt for audit trail
-    info!(
+    debug!(
         "Validated mTLS connection target - app_id: {}, port: {}, instance: '{}'",
         target.app_id, target.port, target.instance_id
     );
@@ -583,8 +580,7 @@ fn validate_connection_target(target: &TargetInfo) -> Result<(), Status> {
 
 /// Verify response security and log connection info
 fn verify_response_security(response: &reqwest::Response, target: &TargetInfo) -> Result<()> {
-    // Log successful mTLS connection
-    info!(
+    debug!(
         "mTLS connection established successfully - app_id: {}, port: {}, status: {}",
         target.app_id,
         target.port,

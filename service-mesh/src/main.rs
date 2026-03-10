@@ -2,6 +2,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use config::{load_config_figment, Config};
 use tracing::info;
+use tracing_subscriber::EnvFilter;
 
 mod client;
 mod config;
@@ -29,9 +30,12 @@ struct Args {
 
 #[rocket::main]
 async fn main() -> Result<()> {
-    // Initialize tracing with config
+    // Initialize tracing with JSON output for Datadog
     tracing_subscriber::fmt()
-        .with_max_level(tracing::Level::DEBUG)
+        .json()
+        .with_env_filter(
+            EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
+        )
         .init();
 
     let args = Args::parse();

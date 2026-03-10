@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"strings"
@@ -31,9 +32,9 @@ type NodeInfo struct {
 }
 
 type BootstrapResponse struct {
-	PreAuthKey   string `json:"pre_auth_key"`
-	SharedKey    string `json:"shared_key"`
-	ServerUrl string `json:"server_url"`
+	PreAuthKey string `json:"pre_auth_key"`
+	SharedKey  string `json:"shared_key"`
+	ServerUrl  string `json:"server_url"`
 }
 
 type NodesResponse struct {
@@ -41,10 +42,10 @@ type NodesResponse struct {
 }
 
 type AppState struct {
-	config       Config
-	nodes        map[string]NodeInfo
-	mutex        sync.RWMutex
-	sharedKey    string
+	config    Config
+	nodes     map[string]NodeInfo
+	mutex     sync.RWMutex
+	sharedKey string
 	ServerUrl string
 }
 
@@ -112,18 +113,18 @@ func buildHeadscaleURL() string {
 		if err == nil {
 			break
 		}
-		log.Printf("Waiting for dstack-mesh to be ready... (%d/30)", i+1)
+		slog.Info("Waiting for dstack-mesh to be ready", "attempt", i+1, "max", 30)
 		time.Sleep(2 * time.Second)
 	}
 
 	if err != nil {
-		log.Printf("Failed to get app_id after retries: %v, falling back to default", err)
+		slog.Warn("Failed to get app_id after retries, falling back to default", "error", err)
 		return "http://headscale:8080"
 	}
 
 	gatewayDomain, err = getGatewayDomainFromDstackMesh()
 	if err != nil {
-		log.Printf("Failed to get gateway_domain: %v, falling back to default", err)
+		slog.Warn("Failed to get gateway_domain, falling back to default", "error", err)
 		return "http://headscale:8080"
 	}
 
@@ -276,7 +277,7 @@ func generatePreAuthKey() (string, error) {
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		log.Printf("Pre-auth key creation failed with status %d: %s", resp.StatusCode, string(body))
+		slog.Error("Pre-auth key creation failed", "status", resp.StatusCode, "body", string(body))
 		return "", fmt.Errorf("headscale API returned status %d: %s", resp.StatusCode, string(body))
 	}
 
@@ -285,7 +286,7 @@ func generatePreAuthKey() (string, error) {
 		return "", fmt.Errorf("failed to read response body: %w", err)
 	}
 
-	log.Printf("Successfully created pre-auth key.")
+	slog.Info("Successfully created pre-auth key")
 
 	var keyResp PreAuthKeyResponse
 	if err := json.Unmarshal(body, &keyResp); err != nil {
@@ -301,35 +302,38 @@ func generatePreAuthKey() (string, error) {
 
 func getOrCreateSharedKey() string {
 	keyPath := "/data/shared_key"
-	
+
 	// Try to load existing key
 	if keyBytes, err := os.ReadFile(keyPath); err == nil {
 		key := strings.TrimSpace(string(keyBytes))
-		log.Printf("Loaded existing shared key from %s", keyPath)
+		slog.Info("Loaded existing shared key", "path", keyPath)
 		return key
 	}
-	
+
 	// Generate new key if file doesn't exist
 	keyBytes := make([]byte, 64)
 	rand.Read(keyBytes)
 	sharedKey := base64.StdEncoding.EncodeToString(keyBytes)
-	
+
 	// Ensure /data directory exists
 	if err := os.MkdirAll("/data", 0755); err != nil {
-		log.Printf("Warning: failed to create /data directory: %v", err)
+		slog.Warn("Failed to create /data directory", "error", err)
 	}
-	
+
 	// Save key to disk
 	if err := os.WriteFile(keyPath, []byte(sharedKey), 0600); err != nil {
-		log.Printf("Warning: failed to save shared key to %s: %v", keyPath, err)
+		slog.Warn("Failed to save shared key", "path", keyPath, "error", err)
 	} else {
-		log.Printf("Generated and saved new shared key to %s", keyPath)
+		slog.Info("Generated and saved new shared key", "path", keyPath)
 	}
-	
+
 	return sharedKey
 }
 
 func main() {
+	// Initialize structured JSON logging
+	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, nil)))
+
 	// Initialize global dstackMeshURL
 	dstackMeshURL = os.Getenv("DSTACK_MESH_URL")
 	if dstackMeshURL == "" {
@@ -358,18 +362,19 @@ func main() {
 	sharedKey := getOrCreateSharedKey()
 
 	ServerUrl := buildHeadscaleURL()
-	log.Printf("Using Headscale URL: %s", ServerUrl)
+	slog.Info("Using Headscale URL", "url", ServerUrl)
 
 	state := &AppState{
-		config:       config,
-		nodes:        make(map[string]NodeInfo),
-		sharedKey:    sharedKey,
+		config:    config,
+		nodes:     make(map[string]NodeInfo),
+		sharedKey: sharedKey,
 		ServerUrl: ServerUrl,
 	}
 
-	log.Printf("API server starting with allowed apps: %v", config.AllowedApps)
+	slog.Info("API server starting", "allowed_apps", config.AllowedApps)
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(gin.Recovery())
 
 	r.Use(func(c *gin.Context) {
 		// Skip auth for health check endpoints
@@ -408,7 +413,7 @@ func main() {
 
 		preAuthKey, err := generatePreAuthKey()
 		if err != nil {
-			log.Printf("Failed to generate pre-auth key: %v", err)
+			slog.Error("Failed to generate pre-auth key", "error", err)
 			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to generate pre-auth key"})
 			return
 		}
@@ -418,12 +423,12 @@ func main() {
 		}
 
 		response := BootstrapResponse{
-			PreAuthKey:   preAuthKey,
-			SharedKey:    state.sharedKey,
-			ServerUrl: state.ServerUrl,
+			PreAuthKey: preAuthKey,
+			SharedKey:  state.sharedKey,
+			ServerUrl:  state.ServerUrl,
 		}
 
-		log.Printf("Bootstrap request from %s (%s)", nodeName, instanceUUID)
+		slog.Info("Bootstrap request", "node_name", nodeName, "instance_id", instanceUUID)
 		c.JSON(http.StatusOK, response)
 	})
 
@@ -434,27 +439,23 @@ func main() {
 		tailscaleIP := c.Query("tailscale_ip")
 		hostname := c.Query("hostname")
 
-		log.Printf("Received node update request")
-		log.Printf("Query params: uuid=%s, node_type=%s, tailscale_ip=%s, hostname=%s", 
-			uuid, nodeType, tailscaleIP, hostname)
-
 		if uuid == "" {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "uuid parameter is required"})
 			return
 		}
 
 		state.mutex.Lock()
-		
+
 		// If this is an etcd node, remove all other etcd nodes first (keep only most recent)
 		if nodeType == "etcd" {
 			for existingUUID, existingNode := range state.nodes {
 				if existingNode.NodeType == "etcd" && existingUUID != uuid {
 					delete(state.nodes, existingUUID)
-					log.Printf("Removed old etcd node %s", existingUUID)
+					slog.Info("Removed old etcd node", "uuid", existingUUID)
 				}
 			}
 		}
-		
+
 		if node, exists := state.nodes[uuid]; exists {
 			if nodeType != "" {
 				node.NodeType = nodeType
@@ -467,14 +468,14 @@ func main() {
 			}
 			state.nodes[uuid] = node
 			state.mutex.Unlock()
-			log.Printf("Updated node %s: type=%s, hostname=%s", uuid, nodeType, hostname)
+			slog.Info("Updated node", "uuid", uuid, "type", nodeType, "hostname", hostname)
 			c.JSON(http.StatusOK, gin.H{"status": "updated"})
 		} else {
 			// Create new node entry if it doesn't exist
 			node := NodeInfo{
-				UUID:           uuid,
-				Name:           uuid,
-				NodeType:       nodeType,
+				UUID:     uuid,
+				Name:     uuid,
+				NodeType: nodeType,
 			}
 			if tailscaleIP != "" {
 				node.TailscaleIP = &tailscaleIP
@@ -484,7 +485,7 @@ func main() {
 			}
 			state.nodes[uuid] = node
 			state.mutex.Unlock()
-			log.Printf("Created new node %s: type=%s, hostname=%s", uuid, nodeType, hostname)
+			slog.Info("Created new node", "uuid", uuid, "type", nodeType, "hostname", hostname)
 			c.JSON(http.StatusOK, gin.H{"status": "created"})
 		}
 	})
@@ -492,7 +493,7 @@ func main() {
 	// Generic endpoint: Discover nodes by type
 	r.GET("/api/discover/:nodeType", func(c *gin.Context) {
 		nodeType := c.Param("nodeType")
-		
+
 		state.mutex.RLock()
 		defer state.mutex.RUnlock()
 
@@ -502,16 +503,16 @@ func main() {
 		for _, node := range state.nodes {
 			if node.NodeType == nodeType && node.ActualHostname != nil && *node.ActualHostname != "" {
 				nodeInfo := gin.H{
-					"hostname": *node.ActualHostname,
+					"hostname":     *node.ActualHostname,
 					"tailscale_ip": node.TailscaleIP,
-					"uuid": node.UUID,
+					"uuid":         node.UUID,
 				}
-				
+
 				// Add port for etcd nodes for backwards compatibility
 				if nodeType == "etcd" {
 					nodeInfo["hostname_with_port"] = fmt.Sprintf("%s:2379", *node.ActualHostname)
 				}
-				
+
 				discoveredNodes = append(discoveredNodes, nodeInfo)
 			}
 		}
@@ -522,11 +523,10 @@ func main() {
 		}
 
 		c.JSON(http.StatusOK, gin.H{
-			"nodes": discoveredNodes,
-			"count": len(discoveredNodes),
+			"nodes":     discoveredNodes,
+			"count":     len(discoveredNodes),
 			"node_type": nodeType,
 		})
-		log.Printf("%s discovery request returned %d nodes", nodeType, len(discoveredNodes))
 	})
 
 	// New endpoint: List all nodes (for debugging)
@@ -556,6 +556,6 @@ func main() {
 	r.GET("/health", healthHandler)
 	r.HEAD("/health", healthHandler)
 
-	log.Printf("API server listening on port %s", port)
+	slog.Info("API server listening", "port", port)
 	r.Run(":" + port)
 }
