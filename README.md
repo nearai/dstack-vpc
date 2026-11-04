@@ -56,7 +56,8 @@ A Rust-based mTLS proxy that provides two services:
 - **Client Proxy (Port 8091)**: Outbound proxy for making authenticated requests to other CVMs
   - Routes requests based on `x-dstack-target-app` and `x-dstack-target-port` headers
   - Performs mTLS connections with RA-TLS certificate verification
-  - Falls back to local `dstack.sock` Unix socket for non-routed requests
+  - Non-routed requests are limited to `GET /info` (served from the local `dstack.sock` agent) and `GET /gateway`; other non-routed requests return 403
+  - Optional access token: when `MESH_CLIENT_PROXY_TOKEN` is set, callers must send it in the `x-dstack-mesh-token` header; the header is not forwarded to target apps. When unset or empty, no token is required
 
 - **Auth Service (Port 8092)**: Inbound authentication for Nginx
   - Validates client certificates via nginx `auth_request` directive
@@ -200,6 +201,7 @@ docker run -d \
 - `MESH_BACKEND`: Backend service for mesh proxy (default: `127.0.0.1:8000`)
 
 **Optional Environment Variables:**
+- `MESH_CLIENT_PROXY_TOKEN`: Access token for the client proxy on port 80 (see above); passed to the mesh, VPC API server and node setup containers
 - `VPC_ALLOWED_APPS`: Comma-separated app IDs or `any` (default: `any`)
 - `VPC_SERVER_URL`: Override auto-detected Headscale URL
 

@@ -57,6 +57,8 @@ Single file implementation: `main.go`
 
 **Certificate-based identity**: App IDs derived from TEE measurements embedded in RA-TLS certificates
 
+**Client proxy access**: Non-routed requests are limited to `GET /info` and `GET /gateway`. If `MESH_CLIENT_PROXY_TOKEN` is set, callers must send it as `x-dstack-mesh-token` (not forwarded to targets); unset or empty means no token is required.
+
 **Dynamic configuration**: Gateway domain auto-detected from DStack infrastructure; certificates generated from `dstack.sock` API
 
 ## Environment Variables
@@ -93,7 +95,7 @@ docker exec vpc-server headscale nodes list
 - Port 80: Client HTTP proxy → mesh (8091)
 - Port 443: Server mTLS proxy with auth_request → backend
 - Port 8080: Headscale control plane (internal)
-- Port 8000: VPC API server (internal)
+- Port 8000: VPC API server (compose network only, not published; reached through the mesh :443 proxy)
 - VPN range: `100.128.0.0/10` with `.dstack.internal` DNS
 
 ## CVM Deployment Settings
