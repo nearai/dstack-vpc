@@ -24,6 +24,10 @@ use crate::dstack::{dstack_agent_address, get_app_id};
 pub struct ClientState {
     gateway_domain: String,
     http_client: Client,
+    /// Optional shared-secret token. When set, the client proxy only serves
+    /// callers that present a matching `x-dstack-mesh-token` header. When unset,
+    /// the proxy behaves as before and requires no token.
+    client_proxy_token: Option<String>,
 }
 
 pub struct ReqwestStreamReader {
@@ -198,17 +202,81 @@ impl<'r> FromRequest<'r> for DstackRequest {
     }
 }
 
+/// Constant-time byte comparison, so a mismatched token does not leak its
+/// correct prefix length through response timing.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Request guard enforcing the client-proxy access token.
+///
+/// When `ClientState.client_proxy_token` is set, a request must carry a matching
+/// `x-dstack-mesh-token` header or it is rejected with 401. When the token is
+/// unset the guard allows the request, preserving the proxy's prior behavior.
+/// Health checks are not guarded.
+pub struct AuthorizedCaller;
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for AuthorizedCaller {
+    type Error = ();
+
+    async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
+        let Some(state) = request.rocket().state::<ClientState>() else {
+            return request::Outcome::Error((Status::InternalServerError, ()));
+        };
+
+        let Some(expected) = state.client_proxy_token.as_deref() else {
+            // No token configured: behave as before.
+            return request::Outcome::Success(AuthorizedCaller);
+        };
+
+        let provided = request
+            .headers()
+            .get_one("x-dstack-mesh-token")
+            .unwrap_or("");
+
+        if constant_time_eq(expected.as_bytes(), provided.as_bytes()) {
+            request::Outcome::Success(AuthorizedCaller)
+        } else {
+            warn!("Rejecting client-proxy request: missing or invalid x-dstack-mesh-token");
+            request::Outcome::Error((Status::Unauthorized, ()))
+        }
+    }
+}
+
 /// Run client proxy with configuration from main figment
 pub async fn run_client_proxy(main_figment: &Figment, config: &Config) -> Result<()> {
     // Create mTLS-enabled HTTP client
     let http_client = create_mtls_client(config).context("Failed to create mTLS HTTP client")?;
 
+    // Optional access token for the client proxy. Sourced from the environment
+    // so it can be provisioned per-CVM without changing the config files. When
+    // unset, the proxy keeps its previous behavior (no token required).
+    let client_proxy_token = std::env::var("MESH_CLIENT_PROXY_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let token_enforced = client_proxy_token.is_some();
+
     let state = ClientState {
         gateway_domain: config.dstack.gateway_domain.clone(),
         http_client,
+        client_proxy_token,
     };
 
-    info!("Client proxy starting with Figment configuration");
+    if token_enforced {
+        info!("Client proxy starting with access-token enforcement enabled");
+    } else {
+        info!("Client proxy starting with Figment configuration (no access token set)");
+    }
 
     // Create Rocket figment for client service using the client section
     let figment = Figment::new()
@@ -243,6 +311,7 @@ pub async fn run_client_proxy(main_figment: &Figment, config: &Config) -> Result
 /// Handle GET requests
 #[get("/<_path..>")]
 async fn proxy_get_handler(
+    _auth: AuthorizedCaller,
     _path: Segments<'_, Path>,
     request: DstackRequest,
     state: &State<ClientState>,
@@ -253,6 +322,7 @@ async fn proxy_get_handler(
 /// Handle POST requests
 #[post("/<_path..>", data = "<body>")]
 async fn proxy_post_handler(
+    _auth: AuthorizedCaller,
     _path: Segments<'_, Path>,
     request: DstackRequest,
     body: Data<'_>,
@@ -264,6 +334,7 @@ async fn proxy_post_handler(
 /// Handle PUT requests
 #[rocket::put("/<_path..>", data = "<body>")]
 async fn proxy_put_handler(
+    _auth: AuthorizedCaller,
     _path: Segments<'_, Path>,
     request: DstackRequest,
     body: Data<'_>,
@@ -275,6 +346,7 @@ async fn proxy_put_handler(
 /// Handle PATCH requests
 #[rocket::patch("/<_path..>", data = "<body>")]
 async fn proxy_patch_handler(
+    _auth: AuthorizedCaller,
     _path: Segments<'_, Path>,
     request: DstackRequest,
     body: Data<'_>,
@@ -286,6 +358,7 @@ async fn proxy_patch_handler(
 /// Handle DELETE requests
 #[rocket::delete("/<_path..>")]
 async fn proxy_delete_handler(
+    _auth: AuthorizedCaller,
     _path: Segments<'_, Path>,
     request: DstackRequest,
     state: &State<ClientState>,
