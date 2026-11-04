@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -a -o vpc-api-se
 
 
 FROM alpine:3.22@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412 AS ko-builder
-RUN apk add --no-cache wget=1.25.0-r1 jq=1.8.1-r0 bash=5.2.37-r0 squashfs-tools=4.6.1-r1
+RUN apk add --no-cache wget=1.25.0-r1 jq=1.8.2-r0 bash=5.2.37-r0 squashfs-tools=4.6.1-r1
 WORKDIR /build
 COPY ./extract-modules.sh /build/
 RUN ./extract-modules.sh
