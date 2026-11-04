@@ -17,11 +17,14 @@ const PHALA_RATLS_APP_INFO: &[u64] = &[1, 3, 6, 1, 4, 1, 62397, 1, 9];
 
 /// Index of `compose_hash` in the msgpack array written for the extension.
 ///
-/// The extension is `rmp_serde::to_vec(&AppInfo)` (dstack `ra-tls/src/cert.rs`), a positional
-/// array in the field order of `dstack-attest/src/attestation.rs` `AppInfo` (v0.5.9):
-/// 0 app_id, 1 compose_hash, 2 instance_id, 3 device_id, 4 mr_system, 5 mr_aggregated,
-/// 6 os_image_hash, 7 key_provider_info. Each field is a msgpack bin.
+/// Before dstack v0.6.0 the extension is `rmp_serde::to_vec(&AppInfo)` (dstack
+/// `ra-tls/src/cert.rs`), a positional array in the field order of `AppInfo`
+/// (`dstack-attest/src/attestation.rs`, v0.5.9): 0 app_id, 1 compose_hash, 2 instance_id,
+/// 3 device_id, 4 mr_system, 5 mr_aggregated, 6 os_image_hash, 7 key_provider_info.
+/// From v0.6.0 it is `rmp_serde::to_vec_named`, a map keyed by field name. Each field is a
+/// msgpack bin.
 const APP_INFO_COMPOSE_HASH_INDEX: usize = 1;
+const APP_INFO_COMPOSE_HASH_KEY: &str = "compose_hash";
 const COMPOSE_HASH_LEN: usize = 32;
 
 /// How the auth service treats the compose hash in the client certificate.
@@ -57,11 +60,19 @@ impl CertPolicyConfig {
         )
     }
 
+    /// The denied list is only parsed when the policy is not `off`, so a malformed list
+    /// cannot stop a service that has the policy disabled.
     pub(crate) fn from_values(policy: Option<&str>, denied: Option<&str>) -> Result<Self> {
-        Ok(Self {
-            policy: parse_cert_policy(policy)?,
-            denied: parse_denied_hashes(denied)?,
-        })
+        let policy = parse_cert_policy(policy)?;
+        let denied = if policy == CertPolicy::Off {
+            if denied.is_some_and(|v| !v.trim().is_empty()) {
+                warn!("MESH_DENIED_COMPOSE_HASHES is set but MESH_CERT_POLICY is off; the list is ignored");
+            }
+            HashSet::new()
+        } else {
+            parse_denied_hashes(denied)?
+        };
+        Ok(Self { policy, denied })
     }
 }
 
@@ -120,18 +131,30 @@ pub(crate) fn evaluate_cert_policy(
 
 /// Extract the compose hash from the raw app-info extension value.
 ///
-/// Anything other than a msgpack array whose element at the compose hash index is a bin of
-/// exactly 32 bytes is treated as undecodable.
+/// Accepts the positional array (before dstack v0.6.0) and the map keyed by field name
+/// (v0.6.0 and later). The value must be a bin of exactly 32 bytes; a map must hold exactly
+/// one `compose_hash` key. Anything else is treated as undecodable.
 fn decode_compose_hash(ext: &[u8]) -> Option<String> {
     let mut reader = ext;
     let value = rmpv::decode::read_value(&mut reader).ok()?;
     if !reader.is_empty() {
         return None;
     }
-    let rmpv::Value::Array(items) = value else {
-        return None;
+    let field = match &value {
+        rmpv::Value::Array(items) => items.get(APP_INFO_COMPOSE_HASH_INDEX)?,
+        rmpv::Value::Map(entries) => {
+            let mut matches = entries
+                .iter()
+                .filter(|(key, _)| key.as_str() == Some(APP_INFO_COMPOSE_HASH_KEY));
+            let (_, field) = matches.next()?;
+            if matches.next().is_some() {
+                return None;
+            }
+            field
+        }
+        _ => return None,
     };
-    match items.get(APP_INFO_COMPOSE_HASH_INDEX)? {
+    match field {
         rmpv::Value::Binary(bytes) if bytes.len() == COMPOSE_HASH_LEN => Some(hex::encode(bytes)),
         _ => None,
     }
@@ -268,6 +291,11 @@ fn health_handler() -> Status {
 pub(crate) async fn run_auth_service(main_figment: &rocket::figment::Figment) -> Result<()> {
     // Validate the certificate policy before launching so a bad value stops the process
     let cert_policy = CertPolicyConfig::from_env()?;
+    info!(
+        "client certificate policy: mode={:?}, denied compose hashes={}",
+        cert_policy.policy,
+        cert_policy.denied.len()
+    );
     // Create Rocket figment for auth service using the auth section
     let figment = rocket::figment::Figment::new()
         .merge(rocket::Config::default())
@@ -368,6 +396,47 @@ mod tests {
         assert_eq!(decode_compose_hash(&out).as_deref(), Some(H2));
     }
 
+    fn named_app_info_bytes(entries: &[(&str, &[u8])]) -> Vec<u8> {
+        use rmpv::Value::{Binary, Map, String as Str};
+        let value = Map(entries
+            .iter()
+            .map(|(k, v)| (Str((*k).into()), Binary(v.to_vec())))
+            .collect());
+        let mut out = Vec::new();
+        rmpv::encode::write_value(&mut out, &value).unwrap();
+        out
+    }
+
+    #[test]
+    fn decodes_named_map_form() {
+        let hash = hex::decode(H2).unwrap();
+        let bytes = named_app_info_bytes(&[
+            ("app_id", &[1; 20]),
+            ("compose_hash", &hash),
+            ("instance_id", &[3; 20]),
+            ("future_field", &[9; 4]),
+        ]);
+        assert_eq!(decode_compose_hash(&bytes).as_deref(), Some(H2));
+    }
+
+    #[test]
+    fn rejects_bad_named_map_form() {
+        let hash = hex::decode(H1).unwrap();
+        // duplicate key, even when both values are valid
+        let dup = named_app_info_bytes(&[("compose_hash", &hash), ("compose_hash", &hash)]);
+        assert_eq!(decode_compose_hash(&dup), None);
+        // wrong size
+        for len in [31, 33] {
+            let bytes = named_app_info_bytes(&[("compose_hash", &vec![1; len])]);
+            assert_eq!(decode_compose_hash(&bytes), None);
+        }
+        // map without the key
+        let bytes = named_app_info_bytes(&[("app_id", &[1; 20]), ("instance_id", &hash)]);
+        assert_eq!(decode_compose_hash(&bytes), None);
+        // empty map
+        assert_eq!(decode_compose_hash(&named_app_info_bytes(&[])), None);
+    }
+
     #[test]
     fn rejects_undecodable_extension() {
         use rmpv::Value::{Array, Binary, Integer, String as Str};
@@ -453,6 +522,15 @@ mod tests {
         assert!(cfg.denied.is_empty());
         assert!(CertPolicyConfig::from_values(Some("bogus"), None).is_err());
         assert!(CertPolicyConfig::from_values(Some("warn"), Some("zz")).is_err());
+        assert!(CertPolicyConfig::from_values(Some("enforce"), Some("zz")).is_err());
+        // with the policy off the list is not parsed, so a malformed one is ignored
+        for policy in [None, Some("off")] {
+            let cfg = CertPolicyConfig::from_values(policy, Some("zz")).unwrap();
+            assert_eq!(cfg.policy, CertPolicy::Off);
+            assert!(cfg.denied.is_empty());
+        }
+        let cfg = CertPolicyConfig::from_values(Some("warn"), Some(H1)).unwrap();
+        assert_eq!(cfg.denied, set(&[H1]));
     }
 
     #[test]

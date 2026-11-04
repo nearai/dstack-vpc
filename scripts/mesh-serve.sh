@@ -27,7 +27,14 @@ ca_file = "/etc/ssl/certs/ca.crt"
 EOF
 
 echo "Generating server certificate using dstack.sock HTTP API..."
-CERT_URL='http://localhost/GetTlsKey?subject=localhost&usage_server_auth=true&usage_client_auth=true&with_app_info=true'
+CERT_URL='http://localhost/GetTlsKey?subject=localhost&usage_server_auth=true&usage_client_auth=true'
+
+# Request the app-info extension only when the certificate policy reads it. Trimmed like server.rs.
+MESH_CERT_POLICY_TRIMMED="${MESH_CERT_POLICY#"${MESH_CERT_POLICY%%[![:space:]]*}"}"
+MESH_CERT_POLICY_TRIMMED="${MESH_CERT_POLICY_TRIMMED%"${MESH_CERT_POLICY_TRIMMED##*[![:space:]]}"}"
+case "$MESH_CERT_POLICY_TRIMMED" in
+    warn|enforce) CERT_URL="${CERT_URL}&with_app_info=true" ;;
+esac
 
 echo "Requesting certificates from dstack.sock..."
 echo "Using URL: $CERT_URL"
