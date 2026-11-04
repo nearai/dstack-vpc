@@ -293,6 +293,7 @@ pub async fn run_client_proxy(main_figment: &Figment, config: &Config) -> Result
             "/",
             routes![
                 proxy_get_handler,
+                proxy_head_handler,
                 proxy_post_handler,
                 proxy_put_handler,
                 proxy_patch_handler,
@@ -315,6 +316,29 @@ async fn proxy_get_handler(
     request: DstackRequest,
     state: &State<ClientState>,
 ) -> Result<ProxyResponse, Status> {
+    proxy_request(&request, state, None).await
+}
+
+/// Handle HEAD requests.
+///
+/// Rocket otherwise rewrites HEAD to GET before the GET handler runs, so
+/// `allowed_dstack_rpc` would never see HEAD. Non-routed HEAD is refused here;
+/// routed HEAD keeps its previous behavior (forwarded as GET).
+#[rocket::head("/<_path..>")]
+async fn proxy_head_handler(
+    _auth: AuthorizedCaller,
+    _path: Segments<'_, Path>,
+    mut request: DstackRequest,
+    state: &State<ClientState>,
+) -> Result<ProxyResponse, Status> {
+    if extract_target_info(&request).is_none() {
+        warn!(
+            "Rejecting dstack agent request: method 'HEAD' path '{}' is not allowed",
+            request.path
+        );
+        return Err(Status::Forbidden);
+    }
+    request.method = "GET".to_string();
     proxy_request(&request, state, None).await
 }
 
@@ -371,12 +395,28 @@ fn health_handler() -> Status {
     Status::Ok
 }
 
-/// Map a request to the single dstack agent RPC that may be served locally.
-/// Only `GET info` is allowed; the match is ASCII case-insensitive and ignores
-/// leading slashes. Any other method or path returns `None`.
-fn allowed_dstack_rpc(method: &str, path: &str) -> Option<&'static str> {
-    if method == "GET" && path.trim_start_matches('/').eq_ignore_ascii_case("info") {
-        Some("Info")
+/// A non-routed request that may be served locally.
+#[derive(Debug, PartialEq, Eq)]
+enum LocalRpc {
+    /// Forwarded to the dstack agent `Info` RPC.
+    Info,
+    /// Answered from the configured gateway domain.
+    Gateway,
+}
+
+/// Map a request to the local RPC that may be served without a target.
+/// Only `GET info` and `GET gateway` are allowed (HEAD and all other methods
+/// are refused); the match is ASCII case-insensitive and ignores leading
+/// slashes. Any other method or path returns `None`.
+fn allowed_dstack_rpc(method: &str, path: &str) -> Option<LocalRpc> {
+    if method != "GET" {
+        return None;
+    }
+    let path = path.trim_start_matches('/');
+    if path.eq_ignore_ascii_case("info") {
+        Some(LocalRpc::Info)
+    } else if path.eq_ignore_ascii_case("gateway") {
+        Some(LocalRpc::Gateway)
     } else {
         None
     }
@@ -396,13 +436,6 @@ async fn proxy_to_dstack_sock(
 ) -> Result<ProxyResponse, Status> {
     let path = request.path.trim_start_matches('/');
 
-    if path.trim_start_matches('/').eq_ignore_ascii_case("gateway") {
-        let gateway_info = serde_json::json!({
-            "gateway_domain": state.gateway_domain
-        });
-        return Ok(ProxyResponse::Json(gateway_info));
-    }
-
     let Some(rpc) = allowed_dstack_rpc(&request.method, path) else {
         warn!(
             "Rejecting dstack agent request: method '{}' path '{}' is not allowed",
@@ -411,12 +444,19 @@ async fn proxy_to_dstack_sock(
         return Err(Status::Forbidden);
     };
 
+    if rpc == LocalRpc::Gateway {
+        let gateway_info = serde_json::json!({
+            "gateway_domain": state.gateway_domain
+        });
+        return Ok(ProxyResponse::Json(gateway_info));
+    }
+
     let agent_address = dstack_agent_address();
     let agent_url;
     let agent_sock;
 
     if agent_address.starts_with("unix:") {
-        agent_url = format!("http://localhost/{rpc}");
+        agent_url = "http://localhost/Info".to_string();
         agent_sock = Some(agent_address.trim_start_matches("unix:").to_string());
     } else {
         agent_url = agent_address;
@@ -694,7 +734,23 @@ mod tests {
     #[test]
     fn allows_get_info() {
         for p in ["info", "/info", "INFO", "Info"] {
-            assert_eq!(allowed_dstack_rpc("GET", p), Some("Info"), "{p}");
+            assert_eq!(allowed_dstack_rpc("GET", p), Some(LocalRpc::Info), "{p}");
+        }
+    }
+
+    #[test]
+    fn allows_get_gateway_any_case() {
+        for p in ["gateway", "/gateway", "GATEWAY", "Gateway", "gAtEwAy"] {
+            assert_eq!(allowed_dstack_rpc("GET", p), Some(LocalRpc::Gateway), "{p}");
+        }
+    }
+
+    #[test]
+    fn local_rpcs_are_get_only() {
+        for method in ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "get"] {
+            for p in ["info", "gateway", "/Gateway", "GATEWAY"] {
+                assert_eq!(allowed_dstack_rpc(method, p), None, "{method} {p}");
+            }
         }
     }
 
@@ -711,6 +767,9 @@ mod tests {
             "info/",
             "foo/info",
             "info/foo",
+            "gateway/",
+            "gateway/foo",
+            "foo/gateway",
             "",
         ] {
             assert_eq!(allowed_dstack_rpc("GET", p), None, "{p}");
@@ -772,6 +831,120 @@ mod tests {
     fn rejects_bad_port() {
         for p in ["0", "70000", "443s", "", " 443", "-1", "4.43", "65536"] {
             assert!(check_target_fields("ab", "", p).is_err(), "{p:?}");
+        }
+    }
+
+    // Guard tests use Rocket's local client against the real routes. `/gateway`
+    // and `/health` are answered without any upstream call, so no network or
+    // dstack.sock is needed.
+    mod guard {
+        use super::*;
+        use rocket::http::{Header, Status};
+        use rocket::local::blocking::Client as LocalClient;
+
+        const TOKEN_HEADER: &str = "x-dstack-mesh-token";
+
+        fn local_client(token: Option<&str>) -> LocalClient {
+            let state = ClientState {
+                gateway_domain: "gw.example.test".to_string(),
+                http_client: Client::new(),
+                client_proxy_token: token.map(str::to_string),
+            };
+            let rocket = rocket::build().manage(state).mount(
+                "/",
+                routes![
+                    proxy_get_handler,
+                    proxy_head_handler,
+                    proxy_post_handler,
+                    proxy_put_handler,
+                    proxy_patch_handler,
+                    proxy_delete_handler,
+                    health_handler,
+                ],
+            );
+            LocalClient::tracked(rocket).expect("valid rocket")
+        }
+
+        fn gateway_status(client: &LocalClient, header: Option<&str>) -> Status {
+            let mut req = client.get("/gateway");
+            if let Some(v) = header {
+                req = req.header(Header::new(TOKEN_HEADER, v.to_string()));
+            }
+            req.dispatch().status()
+        }
+
+        /// Mirrors the env handling in `run_client_proxy`.
+        fn token_from_env_value(raw: Option<&str>) -> Option<String> {
+            raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        }
+
+        #[test]
+        fn token_unset_allows_without_header() {
+            let client = local_client(None);
+            assert_eq!(gateway_status(&client, None), Status::Ok);
+            assert_eq!(gateway_status(&client, Some("anything")), Status::Ok);
+        }
+
+        #[test]
+        fn empty_or_whitespace_env_means_unset() {
+            for raw in [None, Some(""), Some("   "), Some("\t\n")] {
+                let token = token_from_env_value(raw);
+                assert_eq!(token, None, "{raw:?}");
+                let client = local_client(token.as_deref());
+                assert_eq!(gateway_status(&client, None), Status::Ok, "{raw:?}");
+            }
+            assert_eq!(
+                token_from_env_value(Some("  s3cret \n")),
+                Some("s3cret".to_string())
+            );
+        }
+
+        #[test]
+        fn missing_header_is_unauthorized() {
+            let client = local_client(Some("s3cret"));
+            assert_eq!(gateway_status(&client, None), Status::Unauthorized);
+        }
+
+        #[test]
+        fn wrong_header_is_unauthorized() {
+            let client = local_client(Some("s3cret"));
+            for v in ["wrong", "s3cre", "s3cret2", "S3CRET", ""] {
+                assert_eq!(
+                    gateway_status(&client, Some(v)),
+                    Status::Unauthorized,
+                    "{v:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn right_header_is_allowed() {
+            let client = local_client(Some("s3cret"));
+            assert_eq!(gateway_status(&client, Some("s3cret")), Status::Ok);
+        }
+
+        #[test]
+        fn health_stays_open_with_token_set() {
+            let client = local_client(Some("s3cret"));
+            assert_eq!(client.get("/health").dispatch().status(), Status::Ok);
+        }
+
+        #[test]
+        fn gateway_non_get_is_forbidden() {
+            let client = local_client(None);
+            assert_eq!(
+                client.post("/gateway").dispatch().status(),
+                Status::Forbidden
+            );
+            assert_eq!(
+                client.delete("/gateway").dispatch().status(),
+                Status::Forbidden
+            );
+            assert_eq!(
+                client.head("/gateway").dispatch().status(),
+                Status::Forbidden
+            );
+            assert_eq!(client.get("/GateWay").dispatch().status(), Status::Ok);
         }
     }
 }

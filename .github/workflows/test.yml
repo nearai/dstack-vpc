@@ -35,5 +35,8 @@ jobs:
       - name: Test node-name derivation
         run: bash scripts/test-node-name.sh
 
+      - name: Test generated compose omits proxy token
+        run: bash scripts/test-compose-token.sh
+
       - name: Check shell syntax
         run: bash -n scripts/functions.sh scripts/vpc-node-setup.sh scripts/vpc-node-entry.sh scripts/generate-compose.sh
