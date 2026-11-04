@@ -34,6 +34,8 @@ export DSTACK_VPC_NODE_NAME=${VPC_NODE_NAME}
 export DSTACK_VPC_ALLOWED_APPS=${VPC_ALLOWED_APPS}
 # Referenced by name in docker-compose.yml, so `docker compose up` must see it
 export MESH_CLIENT_PROXY_TOKEN="${MESH_CLIENT_PROXY_TOKEN:-}"
+export MESH_CERT_POLICY="${MESH_CERT_POLICY:-}"
+export MESH_DENIED_COMPOSE_HASHES="${MESH_DENIED_COMPOSE_HASHES:-}"
 
 mkdir -p /tmp/dstack-service
 cd /tmp/dstack-service

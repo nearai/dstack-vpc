@@ -59,6 +59,8 @@ Single file implementation: `main.go`
 
 **Client proxy access**: Non-routed requests are limited to `GET /info` and `GET /gateway`. If `MESH_CLIENT_PROXY_TOKEN` is set, callers must send it as `x-dstack-mesh-token` (not forwarded to targets); unset or empty means no token is required.
 
+**Client certificate policy**: `MESH_CERT_POLICY` (`off` default, `warn`, `enforce`) checks the compose hash in the KMS-issued app-info certificate extension (requested with `with_app_info=true` in `scripts/mesh-serve.sh`, only for `warn` and `enforce`; the decoder accepts the positional array and the dstack v0.6.0+ named map) against `MESH_DENIED_COMPOSE_HASHES` (comma-separated, 64 hex characters, optional `0x`). `off` makes no certificate change and ignores the list (not parsed). It is a stopgap denylist for known-bad hashes and does not stop new hashes: unlisted hashes pass; `warn` logs and allows; `enforce` returns 401 for listed hashes and for certificates with a missing or undecodable extension. Invalid values stop startup. New certificates for an old compose are stopped on-chain via `allowedComposeHashes`.
+
 **Dynamic configuration**: Gateway domain auto-detected from DStack infrastructure; certificates generated from `dstack.sock` API
 
 ## Environment Variables
