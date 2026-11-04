@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use heck::ToPascalCase;
 use reqwest::redirect::Policy;
 use reqwest::tls::TlsInfo;
 use reqwest::Client;
@@ -372,10 +371,27 @@ fn health_handler() -> Status {
     Status::Ok
 }
 
+/// Map a request to the single dstack agent RPC that may be served locally.
+/// Only `GET info` is allowed; the match is ASCII case-insensitive and ignores
+/// leading slashes. Any other method or path returns `None`.
+fn allowed_dstack_rpc(method: &str, path: &str) -> Option<&'static str> {
+    if method == "GET" && path.trim_start_matches('/').eq_ignore_ascii_case("info") {
+        Some("Info")
+    } else {
+        None
+    }
+}
+
+/// Whether an inbound header is copied to the outbound request. Routing
+/// headers (`x-dstack-target-*`) and the proxy access token are not forwarded.
+fn should_forward_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    !(name.starts_with("x-dstack-target-") || name == "x-dstack-mesh-token")
+}
+
 /// Proxy request to dstack.sock when no target headers are present
 async fn proxy_to_dstack_sock(
     request: &DstackRequest,
-    body: Option<Data<'_>>,
     state: &State<ClientState>,
 ) -> Result<ProxyResponse, Status> {
     let path = request.path.trim_start_matches('/');
@@ -387,30 +403,20 @@ async fn proxy_to_dstack_sock(
         return Ok(ProxyResponse::Json(gateway_info));
     }
 
-    let path = {
-        let segments: Vec<&str> = path.split('/').collect();
-        if segments.is_empty() {
-            path.to_string()
-        } else {
-            let mut result = segments[..segments.len() - 1].join("/");
-            if !result.is_empty() {
-                result.push('/');
-            }
-            result.push_str(&segments[segments.len() - 1].to_pascal_case());
-            result
-        }
+    let Some(rpc) = allowed_dstack_rpc(&request.method, path) else {
+        warn!(
+            "Rejecting dstack agent request: method '{}' path '{}' is not allowed",
+            request.method, request.path
+        );
+        return Err(Status::Forbidden);
     };
 
-    let full_path = match &request.query_string {
-        Some(query) => format!("{}?{}", path, query),
-        None => path.to_string(),
-    };
     let agent_address = dstack_agent_address();
     let agent_url;
     let agent_sock;
 
     if agent_address.starts_with("unix:") {
-        agent_url = format!("http://localhost/{full_path}");
+        agent_url = format!("http://localhost/{rpc}");
         agent_sock = Some(agent_address.trim_start_matches("unix:").to_string());
     } else {
         agent_url = agent_address;
@@ -427,23 +433,7 @@ async fn proxy_to_dstack_sock(
         .build()
         .map_err(|_| Status::InternalServerError)?;
 
-    // Parse HTTP method
-    let http_method = match reqwest::Method::from_bytes(request.method.as_bytes()) {
-        Ok(m) => m,
-        Err(_) => return Err(Status::MethodNotAllowed),
-    };
-
-    let mut request_builder = client.request(http_method, &agent_url);
-    if let Some(body_data) = body {
-        const MAX_BODY_SIZE: u64 = 1024 * 1024;
-        let mut reader = body_data.open(rocket::data::ByteUnit::Byte(MAX_BODY_SIZE));
-        let mut buffer = Vec::new();
-        if reader.read_to_end(&mut buffer).await.is_ok() {
-            request_builder = request_builder.body(buffer);
-        } else {
-            return Err(Status::BadRequest);
-        }
-    }
+    let request_builder = client.get(&agent_url);
     match request_builder.send().await {
         Ok(response) => Ok(ProxyResponse::Stream(StreamingProxyResponse { response })),
         Err(e) => {
@@ -463,7 +453,7 @@ async fn proxy_request(
         Some(t) => t,
         None => {
             debug!("Missing x-dstack-target-app header, delegating to dstack.sock");
-            return proxy_to_dstack_sock(request, body, state).await;
+            return proxy_to_dstack_sock(request, state).await;
         }
     };
 
@@ -547,7 +537,7 @@ async fn proxy_request(
 
     // Copy relevant headers (excluding routing headers)
     for (name, value) in &request.all_headers {
-        if !name.starts_with("x-dstack-target-") {
+        if should_forward_header(name) {
             request_builder = request_builder.header(name, value);
         }
     }
@@ -677,4 +667,57 @@ fn verify_response_security(response: &reqwest::Response, target: &TargetInfo) -
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_get_info() {
+        for p in ["info", "/info", "INFO", "Info"] {
+            assert_eq!(allowed_dstack_rpc("GET", p), Some("Info"), "{p}");
+        }
+    }
+
+    #[test]
+    fn rejects_other_rpcs() {
+        assert_eq!(allowed_dstack_rpc("POST", "info"), None);
+        for p in [
+            "GetTlsKey",
+            "get_tls_key",
+            "GetKey",
+            "GetQuote",
+            "Sign",
+            "Attest",
+            "info/",
+            "foo/info",
+            "info/foo",
+            "",
+        ] {
+            assert_eq!(allowed_dstack_rpc("GET", p), None, "{p}");
+        }
+    }
+
+    #[test]
+    fn header_forwarding() {
+        for h in [
+            "x-dstack-mesh-token",
+            "X-Dstack-Mesh-Token",
+            "x-dstack-target-app",
+        ] {
+            assert!(!should_forward_header(h), "{h}");
+        }
+        for h in ["content-type", "x-dstack-app-id"] {
+            assert!(should_forward_header(h), "{h}");
+        }
+    }
+
+    #[test]
+    fn constant_time_eq_compares_bytes() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+        assert!(!constant_time_eq(b"secret", b"secre"));
+    }
 }
