@@ -27,7 +27,7 @@ ca_file = "/etc/ssl/certs/ca.crt"
 EOF
 
 echo "Generating server certificate using dstack.sock HTTP API..."
-CERT_URL='http://localhost/GetTlsKey?subject=localhost&usage_server_auth=true&usage_client_auth=true'
+CERT_URL='http://localhost/GetTlsKey?subject=localhost&usage_server_auth=true&usage_client_auth=true&with_app_info=true'
 
 echo "Requesting certificates from dstack.sock..."
 echo "Using URL: $CERT_URL"

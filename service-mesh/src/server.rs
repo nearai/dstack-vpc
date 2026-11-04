@@ -4,10 +4,150 @@ use rocket::http::{Header, Status};
 use rocket::request::{FromRequest, Outcome};
 use rocket::response::Responder;
 use rocket::response::Response;
-use rocket::{get, routes, Request};
-use tracing::{debug, warn};
+use rocket::{get, routes, Request, State};
+use std::collections::HashSet;
+use tracing::{debug, info, warn};
+use x509_parser::der_parser::Oid;
+use x509_parser::prelude::X509Certificate;
 
 use crate::dstack::get_app_id;
+
+/// OID of the app-info certificate extension (dstack `ra-tls/src/oids.rs`, `PHALA_RATLS_APP_INFO`).
+const PHALA_RATLS_APP_INFO: &[u64] = &[1, 3, 6, 1, 4, 1, 62397, 1, 9];
+
+/// Index of `compose_hash` in the msgpack array written for the extension.
+///
+/// The extension is `rmp_serde::to_vec(&AppInfo)` (dstack `ra-tls/src/cert.rs`), a positional
+/// array in the field order of `dstack-attest/src/attestation.rs` `AppInfo` (v0.5.9):
+/// 0 app_id, 1 compose_hash, 2 instance_id, 3 device_id, 4 mr_system, 5 mr_aggregated,
+/// 6 os_image_hash, 7 key_provider_info. Each field is a msgpack bin.
+const APP_INFO_COMPOSE_HASH_INDEX: usize = 1;
+const COMPOSE_HASH_LEN: usize = 32;
+
+/// How the auth service treats the compose hash in the client certificate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CertPolicy {
+    Off,
+    Warn,
+    Enforce,
+}
+
+/// Result of checking a certificate against the policy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PolicyDecision {
+    Allow,
+    WarnMissing,
+    WarnDenied,
+    RejectMissing,
+    RejectDenied,
+}
+
+/// Certificate policy read once at startup.
+#[derive(Debug, Clone)]
+pub(crate) struct CertPolicyConfig {
+    pub policy: CertPolicy,
+    pub denied: HashSet<String>,
+}
+
+impl CertPolicyConfig {
+    pub(crate) fn from_env() -> Result<Self> {
+        Self::from_values(
+            std::env::var("MESH_CERT_POLICY").ok().as_deref(),
+            std::env::var("MESH_DENIED_COMPOSE_HASHES").ok().as_deref(),
+        )
+    }
+
+    pub(crate) fn from_values(policy: Option<&str>, denied: Option<&str>) -> Result<Self> {
+        Ok(Self {
+            policy: parse_cert_policy(policy)?,
+            denied: parse_denied_hashes(denied)?,
+        })
+    }
+}
+
+fn parse_cert_policy(value: Option<&str>) -> Result<CertPolicy> {
+    match value.map(str::trim).unwrap_or("") {
+        "" | "off" => Ok(CertPolicy::Off),
+        "warn" => Ok(CertPolicy::Warn),
+        "enforce" => Ok(CertPolicy::Enforce),
+        other => bail!("invalid MESH_CERT_POLICY {other:?}: expected off, warn or enforce"),
+    }
+}
+
+/// Normalise a compose hash to 64 lowercase hex characters, stripping an optional `0x`.
+fn normalize_hash(raw: &str) -> Result<String> {
+    let trimmed = raw.trim();
+    let hex_part = trimmed
+        .strip_prefix("0x")
+        .or_else(|| trimmed.strip_prefix("0X"))
+        .unwrap_or(trimmed);
+    if hex_part.len() != COMPOSE_HASH_LEN * 2 || !hex_part.bytes().all(|b| b.is_ascii_hexdigit()) {
+        bail!("expected {} hex characters", COMPOSE_HASH_LEN * 2);
+    }
+    Ok(hex_part.to_ascii_lowercase())
+}
+
+/// Parse a comma-separated hash list; empty entries are skipped.
+fn parse_denied_hashes(value: Option<&str>) -> Result<HashSet<String>> {
+    let mut denied = HashSet::new();
+    for entry in value.unwrap_or("").split(',') {
+        if entry.trim().is_empty() {
+            continue;
+        }
+        let hash = normalize_hash(entry)
+            .with_context(|| format!("invalid entry in MESH_DENIED_COMPOSE_HASHES: {entry:?}"))?;
+        denied.insert(hash);
+    }
+    Ok(denied)
+}
+
+/// Decide what to do with a certificate. `compose_hash` is the normalised hash from the
+/// app-info extension, or `None` if the extension is absent or undecodable.
+pub(crate) fn evaluate_cert_policy(
+    policy: CertPolicy,
+    compose_hash: Option<&str>,
+    denied: &HashSet<String>,
+) -> PolicyDecision {
+    match (policy, compose_hash) {
+        (CertPolicy::Off, _) => PolicyDecision::Allow,
+        (CertPolicy::Warn, None) => PolicyDecision::WarnMissing,
+        (CertPolicy::Enforce, None) => PolicyDecision::RejectMissing,
+        (CertPolicy::Warn, Some(h)) if denied.contains(h) => PolicyDecision::WarnDenied,
+        (CertPolicy::Enforce, Some(h)) if denied.contains(h) => PolicyDecision::RejectDenied,
+        (_, Some(_)) => PolicyDecision::Allow,
+    }
+}
+
+/// Extract the compose hash from the raw app-info extension value.
+///
+/// Anything other than a msgpack array whose element at the compose hash index is a bin of
+/// exactly 32 bytes is treated as undecodable.
+fn decode_compose_hash(ext: &[u8]) -> Option<String> {
+    let mut reader = ext;
+    let value = rmpv::decode::read_value(&mut reader).ok()?;
+    if !reader.is_empty() {
+        return None;
+    }
+    let rmpv::Value::Array(items) = value else {
+        return None;
+    };
+    match items.get(APP_INFO_COMPOSE_HASH_INDEX)? {
+        rmpv::Value::Binary(bytes) if bytes.len() == COMPOSE_HASH_LEN => Some(hex::encode(bytes)),
+        _ => None,
+    }
+}
+
+/// Compose hash from the certificate's app-info extension. A missing, duplicated or
+/// undecodable extension gives `None`.
+fn cert_compose_hash(cert: &X509Certificate<'_>) -> Option<String> {
+    let oid = Oid::from(PHALA_RATLS_APP_INFO).ok()?;
+    let ext = cert.get_extension_unique(&oid).ok()??;
+    decode_compose_hash(ext.value)
+}
+
+fn short(hash: &str) -> &str {
+    &hash[..hash.len().min(12)]
+}
 
 /// Custom responder that returns status with headers
 pub struct AuthSuccessResponse {
@@ -47,7 +187,10 @@ impl<'r> FromRequest<'r> for AuthHeaders {
 
 /// Auth endpoint for nginx auth_request integration
 #[get("/auth")]
-async fn auth_handler(headers: AuthHeaders) -> Result<AuthSuccessResponse, Status> {
+async fn auth_handler(
+    headers: AuthHeaders,
+    policy: &State<CertPolicyConfig>,
+) -> Result<AuthSuccessResponse, Status> {
     // Extract client certificate from headers (passed by nginx)
     let cert_header = headers.client_cert.as_ref();
     let verify_header = headers.client_verify.as_ref();
@@ -65,7 +208,7 @@ async fn auth_handler(headers: AuthHeaders) -> Result<AuthSuccessResponse, Statu
         return Err(Status::Unauthorized);
     };
     // Parse and verify certificate
-    match parse_and_verify_cert(cert_pem).await {
+    match parse_and_verify_cert(cert_pem, policy).await {
         Ok(app_id) => {
             debug!("Auth successful for app_id: {app_id}");
             Ok(AuthSuccessResponse { app_id })
@@ -77,7 +220,7 @@ async fn auth_handler(headers: AuthHeaders) -> Result<AuthSuccessResponse, Statu
     }
 }
 
-async fn parse_and_verify_cert(cert_pem: &str) -> Result<String> {
+async fn parse_and_verify_cert(cert_pem: &str, policy: &CertPolicyConfig) -> Result<String> {
     let decoded = urlencoding::decode(cert_pem).context("Failed to decode certificate")?;
     let (_, ca_pem) =
         x509_parser::pem::parse_x509_pem(decoded.as_bytes()).context("Failed to parse ca cert")?;
@@ -86,7 +229,33 @@ async fn parse_and_verify_cert(cert_pem: &str) -> Result<String> {
     else {
         bail!("No app_id found in client cert");
     };
-    Ok(hex::encode(app_id_bytes))
+    let app_id = hex::encode(app_id_bytes);
+    if policy.policy == CertPolicy::Off {
+        return Ok(app_id);
+    }
+    let compose_hash = cert_compose_hash(&cert);
+    let decision = evaluate_cert_policy(policy.policy, compose_hash.as_deref(), &policy.denied);
+    let prefix = compose_hash.as_deref().map(short).unwrap_or("none");
+    match decision {
+        PolicyDecision::Allow => {
+            if policy.policy == CertPolicy::Warn {
+                info!("Cert policy: compose hash {prefix} not denied, app_id: {app_id}");
+            }
+        }
+        PolicyDecision::WarnMissing => {
+            warn!("Cert policy: no usable app-info extension, app_id: {app_id}");
+        }
+        PolicyDecision::WarnDenied => {
+            warn!("Cert policy: denied compose hash {prefix}, app_id: {app_id}");
+        }
+        PolicyDecision::RejectMissing => {
+            bail!("no usable app-info extension in client cert, app_id: {app_id}");
+        }
+        PolicyDecision::RejectDenied => {
+            bail!("denied compose hash {prefix} in client cert, app_id: {app_id}");
+        }
+    }
+    Ok(app_id)
 }
 
 /// Health check endpoint
@@ -97,6 +266,8 @@ fn health_handler() -> Status {
 
 /// Run auth service with configuration from main figment
 pub(crate) async fn run_auth_service(main_figment: &rocket::figment::Figment) -> Result<()> {
+    // Validate the certificate policy before launching so a bad value stops the process
+    let cert_policy = CertPolicyConfig::from_env()?;
     // Create Rocket figment for auth service using the auth section
     let figment = rocket::figment::Figment::new()
         .merge(rocket::Config::default())
@@ -107,10 +278,189 @@ pub(crate) async fn run_auth_service(main_figment: &rocket::figment::Figment) ->
         ));
 
     let _rocket = rocket::custom(figment)
+        .manage(cert_policy)
         .mount("/", routes![auth_handler, health_handler])
         .launch()
         .await
         .map_err(|e| anyhow::anyhow!("Rocket launch error: {}", e))?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const H1: &str = "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff";
+    const H2: &str = "ffeeddccbbaa99887766554433221100ffeeddccbbaa99887766554433221100";
+
+    fn set(items: &[&str]) -> HashSet<String> {
+        items.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// Extension bytes laid out like upstream `AppInfo` (dstack v0.5.9,
+    /// `dstack-attest/src/attestation.rs`): an 8-element msgpack array of bin values in the
+    /// order app_id(20), compose_hash(32), instance_id(20), device_id(32), mr_system(32),
+    /// mr_aggregated(32), os_image_hash(32), key_provider_info(variable).
+    fn app_info_bytes(compose_hash: &[u8]) -> Vec<u8> {
+        use rmpv::Value::{Array, Binary};
+        let value = Array(vec![
+            Binary(vec![1; 20]),
+            Binary(compose_hash.to_vec()),
+            Binary(vec![3; 20]),
+            Binary(vec![4; 32]),
+            Binary(vec![5; 32]),
+            Binary(vec![6; 32]),
+            Binary(vec![7; 32]),
+            Binary(b"{\"name\":\"kms\"}".to_vec()),
+        ]);
+        let mut out = Vec::new();
+        rmpv::encode::write_value(&mut out, &value).unwrap();
+        out
+    }
+
+    #[test]
+    fn policy_matrix() {
+        use CertPolicy::*;
+        use PolicyDecision::*;
+        let denied = set(&[H1]);
+        let empty = HashSet::new();
+        let cases = [
+            (Off, None, &denied, Allow),
+            (Off, Some(H1), &denied, Allow),
+            (Off, Some(H2), &denied, Allow),
+            (Warn, None, &denied, WarnMissing),
+            (Warn, Some(H1), &denied, WarnDenied),
+            (Warn, Some(H2), &denied, Allow),
+            (Warn, Some(H1), &empty, Allow),
+            (Enforce, None, &denied, RejectMissing),
+            (Enforce, None, &empty, RejectMissing),
+            (Enforce, Some(H1), &denied, RejectDenied),
+            (Enforce, Some(H2), &denied, Allow),
+            (Enforce, Some(H1), &empty, Allow),
+        ];
+        for (policy, hash, denied, expected) in cases {
+            assert_eq!(
+                evaluate_cert_policy(policy, hash, denied),
+                expected,
+                "{policy:?} {hash:?} {denied:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn decodes_compose_hash() {
+        let bytes = app_info_bytes(&hex::decode(H1).unwrap());
+        assert_eq!(decode_compose_hash(&bytes).as_deref(), Some(H1));
+    }
+
+    #[test]
+    fn decodes_with_appended_fields() {
+        use rmpv::Value::{Array, Binary};
+        let value = Array(vec![
+            Binary(vec![1; 20]),
+            Binary(hex::decode(H2).unwrap()),
+            Binary(vec![3; 20]),
+            Binary(vec![9; 4]),
+        ]);
+        let mut out = Vec::new();
+        rmpv::encode::write_value(&mut out, &value).unwrap();
+        assert_eq!(decode_compose_hash(&out).as_deref(), Some(H2));
+    }
+
+    #[test]
+    fn rejects_undecodable_extension() {
+        use rmpv::Value::{Array, Binary, Integer, String as Str};
+        let enc = |v: rmpv::Value| {
+            let mut out = Vec::new();
+            rmpv::encode::write_value(&mut out, &v).unwrap();
+            out
+        };
+        // wrong hash length
+        assert_eq!(decode_compose_hash(&app_info_bytes(&[1; 31])), None);
+        assert_eq!(decode_compose_hash(&app_info_bytes(&[1; 33])), None);
+        // not an array
+        assert_eq!(decode_compose_hash(&enc(Binary(vec![1; 32]))), None);
+        // array too short
+        assert_eq!(
+            decode_compose_hash(&enc(Array(vec![Binary(vec![1; 20])]))),
+            None
+        );
+        // element is not bin (hex string, integer)
+        assert_eq!(
+            decode_compose_hash(&enc(Array(vec![Binary(vec![1; 20]), Str(H1.into())]))),
+            None
+        );
+        assert_eq!(
+            decode_compose_hash(&enc(Array(vec![Binary(vec![1; 20]), Integer(1.into())]))),
+            None
+        );
+        // empty, garbage, truncated, trailing bytes
+        assert_eq!(decode_compose_hash(&[]), None);
+        assert_eq!(decode_compose_hash(&[0xc1, 0xff]), None);
+        let good = app_info_bytes(&[1; 32]);
+        assert_eq!(decode_compose_hash(&good[..good.len() - 3]), None);
+        let mut trailing = good.clone();
+        trailing.push(0);
+        assert_eq!(decode_compose_hash(&trailing), None);
+    }
+
+    #[test]
+    fn normalizes_hashes() {
+        assert_eq!(normalize_hash(H1).unwrap(), H1);
+        assert_eq!(normalize_hash(&H1.to_uppercase()).unwrap(), H1);
+        assert_eq!(normalize_hash(&format!("0x{H1}")).unwrap(), H1);
+        assert_eq!(
+            normalize_hash(&format!(" 0x{} ", H1.to_uppercase())).unwrap(),
+            H1
+        );
+        assert!(normalize_hash("").is_err());
+        assert!(normalize_hash("0x").is_err());
+        assert!(normalize_hash(&H1[..62]).is_err());
+        assert!(normalize_hash(&format!("{H1}00")).is_err());
+        assert!(normalize_hash(&format!("{}zz", &H1[..62])).is_err());
+    }
+
+    #[test]
+    fn parses_denied_list() {
+        let list = format!("{},0x{}, {} ,", H1.to_uppercase(), H2, H1);
+        assert_eq!(parse_denied_hashes(Some(&list)).unwrap(), set(&[H1, H2]));
+        assert!(parse_denied_hashes(None).unwrap().is_empty());
+        assert!(parse_denied_hashes(Some("")).unwrap().is_empty());
+        assert!(parse_denied_hashes(Some(&format!("{H1},nothex"))).is_err());
+        assert!(parse_denied_hashes(Some("abcd")).is_err());
+    }
+
+    #[test]
+    fn parses_policy_values() {
+        assert_eq!(parse_cert_policy(None).unwrap(), CertPolicy::Off);
+        assert_eq!(parse_cert_policy(Some("")).unwrap(), CertPolicy::Off);
+        assert_eq!(parse_cert_policy(Some("off")).unwrap(), CertPolicy::Off);
+        assert_eq!(parse_cert_policy(Some("warn")).unwrap(), CertPolicy::Warn);
+        assert_eq!(
+            parse_cert_policy(Some("enforce")).unwrap(),
+            CertPolicy::Enforce
+        );
+        for bad in ["on", "Warn", "true", "enforced"] {
+            assert!(parse_cert_policy(Some(bad)).is_err(), "{bad}");
+        }
+    }
+
+    #[test]
+    fn config_from_values() {
+        let cfg = CertPolicyConfig::from_values(Some("enforce"), None).unwrap();
+        assert_eq!(cfg.policy, CertPolicy::Enforce);
+        assert!(cfg.denied.is_empty());
+        assert!(CertPolicyConfig::from_values(Some("bogus"), None).is_err());
+        assert!(CertPolicyConfig::from_values(Some("warn"), Some("zz")).is_err());
+    }
+
+    #[test]
+    fn short_prefix_is_12_chars() {
+        assert_eq!(
+            short(H1),
+            "00112233445566778899aabbccddeeff00112233445566778899aabbccddeeff"[..12].to_string()
+        );
+        assert_eq!(short("abc"), "abc");
+    }
 }

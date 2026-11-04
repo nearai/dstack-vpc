@@ -202,6 +202,8 @@ docker run -d \
 
 **Optional Environment Variables:**
 - `MESH_CLIENT_PROXY_TOKEN`: Access token for the client proxy on port 80 (see above); passed to the mesh, VPC API server and node setup containers
+- `MESH_CERT_POLICY`: Client certificate policy for the auth service: `off` (default, also when unset or empty), `warn` or `enforce`. Any other value stops the service at startup
+- `MESH_DENIED_COMPOSE_HASHES`: Comma-separated compose hashes (64 hex characters, optional `0x` prefix) for the certificate policy; a malformed entry stops the service at startup. This is a denylist: only listed hashes are refused, and under `enforce` certificates without the app-info extension; unlisted hashes pass. Stopping new certificates for an old compose is done on-chain via `allowedComposeHashes`
 - `VPC_ALLOWED_APPS`: Comma-separated app IDs or `any` (default: `any`)
 - `VPC_SERVER_URL`: Override auto-detected Headscale URL
 
