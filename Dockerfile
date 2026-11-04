@@ -1,5 +1,5 @@
 FROM rust:1.88-alpine@sha256:9dfaae478ecd298b6b5a039e1f2cc4fc040fc818a2de9aa78fa714dea036574d AS rust-builder
-RUN apk add --no-cache musl-dev=1.2.5-r12
+RUN apk add --no-cache musl-dev=1.2.5-r13
 RUN rustup target add x86_64-unknown-linux-musl
 WORKDIR /build
 # Build from the workspace root so --locked uses the authoritative top-level
