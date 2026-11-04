@@ -540,7 +540,6 @@ dependencies = [
  "fs-err",
  "futures-util",
  "git-version",
- "heck",
  "hex",
  "reqwest",
  "rocket",

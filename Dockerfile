@@ -1,5 +1,5 @@
 FROM rust:1.88-alpine@sha256:9dfaae478ecd298b6b5a039e1f2cc4fc040fc818a2de9aa78fa714dea036574d AS rust-builder
-RUN apk add --no-cache musl-dev=1.2.5-r12
+RUN apk add --no-cache musl-dev=1.2.5-r13
 RUN rustup target add x86_64-unknown-linux-musl
 WORKDIR /build
 # Build from the workspace root so --locked uses the authoritative top-level
@@ -24,7 +24,7 @@ RUN CGO_ENABLED=0 GOOS=linux go build -trimpath -buildvcs=false -a -o vpc-api-se
 
 
 FROM alpine:3.22@sha256:4b7ce07002c69e8f3d704a9c5d6fd3053be500b7f1c69fc0d80990c2ad8dd412 AS ko-builder
-RUN apk add --no-cache wget=1.25.0-r1 jq=1.8.1-r0 bash=5.2.37-r0 squashfs-tools=4.6.1-r1
+RUN apk add --no-cache wget=1.25.0-r1 jq=1.8.2-r0 bash=5.2.37-r0 squashfs-tools=4.6.1-r1
 WORKDIR /build
 COPY ./extract-modules.sh /build/
 RUN ./extract-modules.sh
@@ -52,6 +52,7 @@ RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt
     echo 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250411T024939Z bookworm main' > /etc/apt/sources.list && \
     echo 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20250411T024939Z bookworm-security main' >> /etc/apt/sources.list && \
     echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/10no-check-valid-until && \
+    printf 'Acquire::Retries "10";\nAcquire::http::Timeout "60";\n' > /etc/apt/apt.conf.d/10retries && \
     rm -rf /etc/apt/sources.list.d/* && \
     mkdir -p /etc/apt/preferences.d && \
     while IFS= read -r line; do \

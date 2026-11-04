@@ -60,8 +60,21 @@ type GatewayInfo struct {
 	GatewayDomain string `json:"gateway_domain"`
 }
 
+// dstackMeshGet issues a GET to the mesh client proxy, adding the access token
+// header when MESH_CLIENT_PROXY_TOKEN is set.
+func dstackMeshGet(path string) (*http.Response, error) {
+	req, err := http.NewRequest(http.MethodGet, fmt.Sprintf("%s%s", dstackMeshURL, path), nil)
+	if err != nil {
+		return nil, err
+	}
+	if token := strings.TrimSpace(os.Getenv("MESH_CLIENT_PROXY_TOKEN")); token != "" {
+		req.Header.Set("x-dstack-mesh-token", token)
+	}
+	return http.DefaultClient.Do(req)
+}
+
 func getAppIDFromDstackMesh() (string, error) {
-	resp, err := http.Get(fmt.Sprintf("%s/info", dstackMeshURL))
+	resp, err := dstackMeshGet("/info")
 	if err != nil {
 		return "", fmt.Errorf("failed to get app info: %w", err)
 	}
@@ -80,7 +93,7 @@ func getAppIDFromDstackMesh() (string, error) {
 }
 
 func getGatewayDomainFromDstackMesh() (string, error) {
-	resp, err := http.Get(fmt.Sprintf("%s/gateway", dstackMeshURL))
+	resp, err := dstackMeshGet("/gateway")
 	if err != nil {
 		return "", fmt.Errorf("failed to get gateway info: %w", err)
 	}

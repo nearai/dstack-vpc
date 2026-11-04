@@ -1,5 +1,4 @@
 use anyhow::{bail, Context, Result};
-use heck::ToPascalCase;
 use reqwest::redirect::Policy;
 use reqwest::tls::TlsInfo;
 use reqwest::Client;
@@ -24,6 +23,10 @@ use crate::dstack::{dstack_agent_address, get_app_id};
 pub struct ClientState {
     gateway_domain: String,
     http_client: Client,
+    /// Optional shared-secret token. When set, the client proxy only serves
+    /// callers that present a matching `x-dstack-mesh-token` header. When unset,
+    /// the proxy behaves as before and requires no token.
+    client_proxy_token: Option<String>,
 }
 
 pub struct ReqwestStreamReader {
@@ -198,17 +201,81 @@ impl<'r> FromRequest<'r> for DstackRequest {
     }
 }
 
+/// Constant-time byte comparison, so a mismatched token does not leak its
+/// correct prefix length through response timing.
+fn constant_time_eq(a: &[u8], b: &[u8]) -> bool {
+    if a.len() != b.len() {
+        return false;
+    }
+    let mut diff = 0u8;
+    for (x, y) in a.iter().zip(b.iter()) {
+        diff |= x ^ y;
+    }
+    diff == 0
+}
+
+/// Request guard enforcing the client-proxy access token.
+///
+/// When `ClientState.client_proxy_token` is set, a request must carry a matching
+/// `x-dstack-mesh-token` header or it is rejected with 401. When the token is
+/// unset the guard allows the request, preserving the proxy's prior behavior.
+/// Health checks are not guarded.
+pub struct AuthorizedCaller;
+
+#[rocket::async_trait]
+impl<'r> FromRequest<'r> for AuthorizedCaller {
+    type Error = ();
+
+    async fn from_request(request: &'r Request<'_>) -> request::Outcome<Self, Self::Error> {
+        let Some(state) = request.rocket().state::<ClientState>() else {
+            return request::Outcome::Error((Status::InternalServerError, ()));
+        };
+
+        let Some(expected) = state.client_proxy_token.as_deref() else {
+            // No token configured: behave as before.
+            return request::Outcome::Success(AuthorizedCaller);
+        };
+
+        let provided = request
+            .headers()
+            .get_one("x-dstack-mesh-token")
+            .unwrap_or("");
+
+        if constant_time_eq(expected.as_bytes(), provided.as_bytes()) {
+            request::Outcome::Success(AuthorizedCaller)
+        } else {
+            warn!("Rejecting client-proxy request: missing or invalid x-dstack-mesh-token");
+            request::Outcome::Error((Status::Unauthorized, ()))
+        }
+    }
+}
+
 /// Run client proxy with configuration from main figment
 pub async fn run_client_proxy(main_figment: &Figment, config: &Config) -> Result<()> {
     // Create mTLS-enabled HTTP client
     let http_client = create_mtls_client(config).context("Failed to create mTLS HTTP client")?;
 
+    // Optional access token for the client proxy. Sourced from the environment
+    // so it can be provisioned per-CVM without changing the config files. When
+    // unset, the proxy keeps its previous behavior (no token required).
+    let client_proxy_token = std::env::var("MESH_CLIENT_PROXY_TOKEN")
+        .ok()
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty());
+
+    let token_enforced = client_proxy_token.is_some();
+
     let state = ClientState {
         gateway_domain: config.dstack.gateway_domain.clone(),
         http_client,
+        client_proxy_token,
     };
 
-    info!("Client proxy starting with Figment configuration");
+    if token_enforced {
+        info!("Client proxy starting with access-token enforcement enabled");
+    } else {
+        info!("Client proxy starting with Figment configuration (no access token set)");
+    }
 
     // Create Rocket figment for client service using the client section
     let figment = Figment::new()
@@ -226,6 +293,7 @@ pub async fn run_client_proxy(main_figment: &Figment, config: &Config) -> Result
             "/",
             routes![
                 proxy_get_handler,
+                proxy_head_handler,
                 proxy_post_handler,
                 proxy_put_handler,
                 proxy_patch_handler,
@@ -243,6 +311,7 @@ pub async fn run_client_proxy(main_figment: &Figment, config: &Config) -> Result
 /// Handle GET requests
 #[get("/<_path..>")]
 async fn proxy_get_handler(
+    _auth: AuthorizedCaller,
     _path: Segments<'_, Path>,
     request: DstackRequest,
     state: &State<ClientState>,
@@ -250,9 +319,33 @@ async fn proxy_get_handler(
     proxy_request(&request, state, None).await
 }
 
+/// Handle HEAD requests.
+///
+/// Rocket otherwise rewrites HEAD to GET before the GET handler runs, so
+/// `allowed_dstack_rpc` would never see HEAD. Non-routed HEAD is refused here;
+/// routed HEAD keeps its previous behavior (forwarded as GET).
+#[rocket::head("/<_path..>")]
+async fn proxy_head_handler(
+    _auth: AuthorizedCaller,
+    _path: Segments<'_, Path>,
+    mut request: DstackRequest,
+    state: &State<ClientState>,
+) -> Result<ProxyResponse, Status> {
+    if extract_target_info(&request).is_none() {
+        warn!(
+            "Rejecting dstack agent request: method 'HEAD' path '{}' is not allowed",
+            request.path
+        );
+        return Err(Status::Forbidden);
+    }
+    request.method = "GET".to_string();
+    proxy_request(&request, state, None).await
+}
+
 /// Handle POST requests
 #[post("/<_path..>", data = "<body>")]
 async fn proxy_post_handler(
+    _auth: AuthorizedCaller,
     _path: Segments<'_, Path>,
     request: DstackRequest,
     body: Data<'_>,
@@ -264,6 +357,7 @@ async fn proxy_post_handler(
 /// Handle PUT requests
 #[rocket::put("/<_path..>", data = "<body>")]
 async fn proxy_put_handler(
+    _auth: AuthorizedCaller,
     _path: Segments<'_, Path>,
     request: DstackRequest,
     body: Data<'_>,
@@ -275,6 +369,7 @@ async fn proxy_put_handler(
 /// Handle PATCH requests
 #[rocket::patch("/<_path..>", data = "<body>")]
 async fn proxy_patch_handler(
+    _auth: AuthorizedCaller,
     _path: Segments<'_, Path>,
     request: DstackRequest,
     body: Data<'_>,
@@ -286,6 +381,7 @@ async fn proxy_patch_handler(
 /// Handle DELETE requests
 #[rocket::delete("/<_path..>")]
 async fn proxy_delete_handler(
+    _auth: AuthorizedCaller,
     _path: Segments<'_, Path>,
     request: DstackRequest,
     state: &State<ClientState>,
@@ -299,45 +395,68 @@ fn health_handler() -> Status {
     Status::Ok
 }
 
+/// A non-routed request that may be served locally.
+#[derive(Debug, PartialEq, Eq)]
+enum LocalRpc {
+    /// Forwarded to the dstack agent `Info` RPC.
+    Info,
+    /// Answered from the configured gateway domain.
+    Gateway,
+}
+
+/// Map a request to the local RPC that may be served without a target.
+/// Only `GET info` and `GET gateway` are allowed (HEAD and all other methods
+/// are refused); the match is ASCII case-insensitive and ignores leading
+/// slashes. Any other method or path returns `None`.
+fn allowed_dstack_rpc(method: &str, path: &str) -> Option<LocalRpc> {
+    if method != "GET" {
+        return None;
+    }
+    let path = path.trim_start_matches('/');
+    if path.eq_ignore_ascii_case("info") {
+        Some(LocalRpc::Info)
+    } else if path.eq_ignore_ascii_case("gateway") {
+        Some(LocalRpc::Gateway)
+    } else {
+        None
+    }
+}
+
+/// Whether an inbound header is copied to the outbound request. Routing
+/// headers (`x-dstack-target-*`) and the proxy access token are not forwarded.
+fn should_forward_header(name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    !(name.starts_with("x-dstack-target-") || name == "x-dstack-mesh-token")
+}
+
 /// Proxy request to dstack.sock when no target headers are present
 async fn proxy_to_dstack_sock(
     request: &DstackRequest,
-    body: Option<Data<'_>>,
     state: &State<ClientState>,
 ) -> Result<ProxyResponse, Status> {
     let path = request.path.trim_start_matches('/');
 
-    if path.trim_start_matches('/').eq_ignore_ascii_case("gateway") {
+    let Some(rpc) = allowed_dstack_rpc(&request.method, path) else {
+        warn!(
+            "Rejecting dstack agent request: method '{}' path '{}' is not allowed",
+            request.method, request.path
+        );
+        return Err(Status::Forbidden);
+    };
+
+    if rpc == LocalRpc::Gateway {
         let gateway_info = serde_json::json!({
             "gateway_domain": state.gateway_domain
         });
         return Ok(ProxyResponse::Json(gateway_info));
     }
 
-    let path = {
-        let segments: Vec<&str> = path.split('/').collect();
-        if segments.is_empty() {
-            path.to_string()
-        } else {
-            let mut result = segments[..segments.len() - 1].join("/");
-            if !result.is_empty() {
-                result.push('/');
-            }
-            result.push_str(&segments[segments.len() - 1].to_pascal_case());
-            result
-        }
-    };
-
-    let full_path = match &request.query_string {
-        Some(query) => format!("{}?{}", path, query),
-        None => path.to_string(),
-    };
     let agent_address = dstack_agent_address();
     let agent_url;
     let agent_sock;
 
     if agent_address.starts_with("unix:") {
-        agent_url = format!("http://localhost/{full_path}");
+        agent_url = "http://localhost/Info".to_string();
         agent_sock = Some(agent_address.trim_start_matches("unix:").to_string());
     } else {
         agent_url = agent_address;
@@ -354,23 +473,7 @@ async fn proxy_to_dstack_sock(
         .build()
         .map_err(|_| Status::InternalServerError)?;
 
-    // Parse HTTP method
-    let http_method = match reqwest::Method::from_bytes(request.method.as_bytes()) {
-        Ok(m) => m,
-        Err(_) => return Err(Status::MethodNotAllowed),
-    };
-
-    let mut request_builder = client.request(http_method, &agent_url);
-    if let Some(body_data) = body {
-        const MAX_BODY_SIZE: u64 = 1024 * 1024;
-        let mut reader = body_data.open(rocket::data::ByteUnit::Byte(MAX_BODY_SIZE));
-        let mut buffer = Vec::new();
-        if reader.read_to_end(&mut buffer).await.is_ok() {
-            request_builder = request_builder.body(buffer);
-        } else {
-            return Err(Status::BadRequest);
-        }
-    }
+    let request_builder = client.get(&agent_url);
     match request_builder.send().await {
         Ok(response) => Ok(ProxyResponse::Stream(StreamingProxyResponse { response })),
         Err(e) => {
@@ -390,12 +493,12 @@ async fn proxy_request(
         Some(t) => t,
         None => {
             debug!("Missing x-dstack-target-app header, delegating to dstack.sock");
-            return proxy_to_dstack_sock(request, body, state).await;
+            return proxy_to_dstack_sock(request, state).await;
         }
     };
 
     // Validate connection target before proceeding
-    validate_connection_target(&target)?;
+    validate_connection_target(request, &target)?;
 
     // Build target URL
     let url = {
@@ -474,7 +577,7 @@ async fn proxy_request(
 
     // Copy relevant headers (excluding routing headers)
     for (name, value) in &request.all_headers {
-        if !name.starts_with("x-dstack-target-") {
+        if should_forward_header(name) {
             request_builder = request_builder.header(name, value);
         }
     }
@@ -552,20 +655,38 @@ fn create_mtls_client(config: &Config) -> Result<Client> {
     Ok(client)
 }
 
-/// Validate that we should connect to the specified target
-fn validate_connection_target(target: &TargetInfo) -> Result<(), Status> {
-    // Ensure app_id is present and valid
-    if target.app_id.is_empty() {
-        tracing::error!("Target app_id cannot be empty");
-        return Err(Status::BadRequest);
-    }
+/// Maximum length of the app and instance identifiers accepted in target headers
+const MAX_TARGET_ID_LEN: usize = 64;
 
-    // Validate app_id format (should be hex string for dstack)
-    if !target.app_id.chars().all(|c| c.is_ascii_hexdigit()) {
-        warn!(
-            "Target app_id '{}' is not in expected hex format",
-            target.app_id
-        );
+/// Check the raw target header values before they are used to build a URL.
+///
+/// - `app_id`: 1-64 ASCII hex characters
+/// - `instance_id`: empty, or 1-64 ASCII hex characters or `-`
+/// - `port`: a non-zero u16 in decimal
+fn check_target_fields(app_id: &str, instance_id: &str, port: &str) -> Result<(), Status> {
+    let app_ok = (1..=MAX_TARGET_ID_LEN).contains(&app_id.len())
+        && app_id.bytes().all(|c| c.is_ascii_hexdigit());
+    let instance_ok = instance_id.len() <= MAX_TARGET_ID_LEN
+        && instance_id
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() || c == b'-');
+    let port_ok = port.parse::<u16>().is_ok_and(|p| p != 0);
+    if app_ok && instance_ok && port_ok {
+        Ok(())
+    } else {
+        Err(Status::BadRequest)
+    }
+}
+
+/// Validate that we should connect to the specified target.
+///
+/// The port is checked from the raw header (default 443 when absent) because
+/// `extract_target_info` falls back to 443 for values that do not parse.
+fn validate_connection_target(request: &DstackRequest, target: &TargetInfo) -> Result<(), Status> {
+    let port = request.target_port.as_deref().unwrap_or("443");
+    if let Err(status) = check_target_fields(&target.app_id, &target.instance_id, port) {
+        warn!("Rejected invalid target headers (app_id/instance/port)");
+        return Err(status);
     }
     debug!(
         "Validated mTLS connection target - app_id: {}, port: {}, instance: '{}'",
@@ -604,4 +725,226 @@ fn verify_response_security(response: &reqwest::Response, target: &TargetInfo) -
         );
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn allows_get_info() {
+        for p in ["info", "/info", "INFO", "Info"] {
+            assert_eq!(allowed_dstack_rpc("GET", p), Some(LocalRpc::Info), "{p}");
+        }
+    }
+
+    #[test]
+    fn allows_get_gateway_any_case() {
+        for p in ["gateway", "/gateway", "GATEWAY", "Gateway", "gAtEwAy"] {
+            assert_eq!(allowed_dstack_rpc("GET", p), Some(LocalRpc::Gateway), "{p}");
+        }
+    }
+
+    #[test]
+    fn local_rpcs_are_get_only() {
+        for method in ["POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS", "get"] {
+            for p in ["info", "gateway", "/Gateway", "GATEWAY"] {
+                assert_eq!(allowed_dstack_rpc(method, p), None, "{method} {p}");
+            }
+        }
+    }
+
+    #[test]
+    fn rejects_other_rpcs() {
+        assert_eq!(allowed_dstack_rpc("POST", "info"), None);
+        for p in [
+            "GetTlsKey",
+            "get_tls_key",
+            "GetKey",
+            "GetQuote",
+            "Sign",
+            "Attest",
+            "info/",
+            "foo/info",
+            "info/foo",
+            "gateway/",
+            "gateway/foo",
+            "foo/gateway",
+            "",
+        ] {
+            assert_eq!(allowed_dstack_rpc("GET", p), None, "{p}");
+        }
+    }
+
+    #[test]
+    fn header_forwarding() {
+        for h in [
+            "x-dstack-mesh-token",
+            "X-Dstack-Mesh-Token",
+            "x-dstack-target-app",
+        ] {
+            assert!(!should_forward_header(h), "{h}");
+        }
+        for h in ["content-type", "x-dstack-app-id"] {
+            assert!(should_forward_header(h), "{h}");
+        }
+    }
+
+    #[test]
+    fn constant_time_eq_compares_bytes() {
+        assert!(constant_time_eq(b"secret", b"secret"));
+        assert!(constant_time_eq(b"", b""));
+        assert!(!constant_time_eq(b"secret", b"secreT"));
+        assert!(!constant_time_eq(b"secret", b"secre"));
+    }
+
+    #[test]
+    fn accepts_valid_targets() {
+        let app = "a1B2c3D4e5f60718293a4b5c6d7e8f9012345678";
+        let uuid = "123e4567-e89b-12d3-a456-426614174000";
+        assert!(check_target_fields(app, "", "443").is_ok());
+        assert!(check_target_fields(app, uuid, "27017").is_ok());
+        assert!(check_target_fields("a", "-", "1").is_ok());
+        assert!(check_target_fields(&"f".repeat(64), &"-".repeat(64), "65535").is_ok());
+    }
+
+    #[test]
+    fn rejects_bad_app_id() {
+        assert!(check_target_fields("", "", "443").is_err());
+        for c in ["/", "@", "#", ".", ":", " ", "?", "g", "-"] {
+            let bad = format!("ab{c}cd");
+            assert!(check_target_fields(&bad, "", "443").is_err(), "{bad:?}");
+        }
+        assert!(check_target_fields(&"a".repeat(65), "", "443").is_err());
+    }
+
+    #[test]
+    fn rejects_bad_instance_id() {
+        for c in ["/", "@", "#", ".", ":", " ", "?", "g"] {
+            let bad = format!("ab{c}cd");
+            assert!(check_target_fields("ab", &bad, "443").is_err(), "{bad:?}");
+        }
+        assert!(check_target_fields("ab", &"a".repeat(65), "443").is_err());
+    }
+
+    #[test]
+    fn rejects_bad_port() {
+        for p in ["0", "70000", "443s", "", " 443", "-1", "4.43", "65536"] {
+            assert!(check_target_fields("ab", "", p).is_err(), "{p:?}");
+        }
+    }
+
+    // Guard tests use Rocket's local client against the real routes. `/gateway`
+    // and `/health` are answered without any upstream call, so no network or
+    // dstack.sock is needed.
+    mod guard {
+        use super::*;
+        use rocket::http::{Header, Status};
+        use rocket::local::blocking::Client as LocalClient;
+
+        const TOKEN_HEADER: &str = "x-dstack-mesh-token";
+
+        fn local_client(token: Option<&str>) -> LocalClient {
+            let state = ClientState {
+                gateway_domain: "gw.example.test".to_string(),
+                http_client: Client::new(),
+                client_proxy_token: token.map(str::to_string),
+            };
+            let rocket = rocket::build().manage(state).mount(
+                "/",
+                routes![
+                    proxy_get_handler,
+                    proxy_head_handler,
+                    proxy_post_handler,
+                    proxy_put_handler,
+                    proxy_patch_handler,
+                    proxy_delete_handler,
+                    health_handler,
+                ],
+            );
+            LocalClient::tracked(rocket).expect("valid rocket")
+        }
+
+        fn gateway_status(client: &LocalClient, header: Option<&str>) -> Status {
+            let mut req = client.get("/gateway");
+            if let Some(v) = header {
+                req = req.header(Header::new(TOKEN_HEADER, v.to_string()));
+            }
+            req.dispatch().status()
+        }
+
+        /// Mirrors the env handling in `run_client_proxy`.
+        fn token_from_env_value(raw: Option<&str>) -> Option<String> {
+            raw.map(|s| s.trim().to_string()).filter(|s| !s.is_empty())
+        }
+
+        #[test]
+        fn token_unset_allows_without_header() {
+            let client = local_client(None);
+            assert_eq!(gateway_status(&client, None), Status::Ok);
+            assert_eq!(gateway_status(&client, Some("anything")), Status::Ok);
+        }
+
+        #[test]
+        fn empty_or_whitespace_env_means_unset() {
+            for raw in [None, Some(""), Some("   "), Some("\t\n")] {
+                let token = token_from_env_value(raw);
+                assert_eq!(token, None, "{raw:?}");
+                let client = local_client(token.as_deref());
+                assert_eq!(gateway_status(&client, None), Status::Ok, "{raw:?}");
+            }
+            assert_eq!(
+                token_from_env_value(Some("  s3cret \n")),
+                Some("s3cret".to_string())
+            );
+        }
+
+        #[test]
+        fn missing_header_is_unauthorized() {
+            let client = local_client(Some("s3cret"));
+            assert_eq!(gateway_status(&client, None), Status::Unauthorized);
+        }
+
+        #[test]
+        fn wrong_header_is_unauthorized() {
+            let client = local_client(Some("s3cret"));
+            for v in ["wrong", "s3cre", "s3cret2", "S3CRET", ""] {
+                assert_eq!(
+                    gateway_status(&client, Some(v)),
+                    Status::Unauthorized,
+                    "{v:?}"
+                );
+            }
+        }
+
+        #[test]
+        fn right_header_is_allowed() {
+            let client = local_client(Some("s3cret"));
+            assert_eq!(gateway_status(&client, Some("s3cret")), Status::Ok);
+        }
+
+        #[test]
+        fn health_stays_open_with_token_set() {
+            let client = local_client(Some("s3cret"));
+            assert_eq!(client.get("/health").dispatch().status(), Status::Ok);
+        }
+
+        #[test]
+        fn gateway_non_get_is_forbidden() {
+            let client = local_client(None);
+            assert_eq!(
+                client.post("/gateway").dispatch().status(),
+                Status::Forbidden
+            );
+            assert_eq!(
+                client.delete("/gateway").dispatch().status(),
+                Status::Forbidden
+            );
+            assert_eq!(
+                client.head("/gateway").dispatch().status(),
+                Status::Forbidden
+            );
+            assert_eq!(client.get("/GateWay").dispatch().status(), Status::Ok);
+        }
+    }
 }
