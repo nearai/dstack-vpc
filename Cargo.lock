@@ -53,7 +53,7 @@ version = "1.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "40c48f72fd53cd289104fc64099abca73db4166ad86ea0b4341abe65af83dadc"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -64,7 +64,7 @@ checksum = "291e6a250ff86cd4a820112fb8898808a366d8f9f58ce16d1f538353ad55747d"
 dependencies = [
  "anstyle",
  "once_cell_polyfill",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -436,16 +436,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cuckoofilter"
-version = "0.5.0"
-source = "git+https://github.com/axiomhq/rust-cuckoofilter?rev=d493bde0d9e1f4560ad04ead86cbd9c92021ded3#d493bde0d9e1f4560ad04ead86cbd9c92021ded3"
-dependencies = [
- "byteorder",
- "fnv",
- "rand 0.8.6",
-]
-
-[[package]]
 name = "data-encoding"
 version = "2.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -591,7 +581,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39cab71617ae0d63f51a36d69f866391735b51691dbda63cf6f96d042b63efeb"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -861,12 +851,6 @@ dependencies = [
  "pin-project-lite",
  "tokio",
 ]
-
-[[package]]
-name = "hash_hasher"
-version = "2.0.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1b4b9ebce26001bad2e6366295f64e381c1e9c479109202149b9e15e154973e9"
 
 [[package]]
 name = "hashbrown"
@@ -1253,7 +1237,7 @@ checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
 dependencies = [
  "hermit-abi",
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1517,7 +1501,7 @@ version = "0.50.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7957b9740744892f114936ab4a57b3f487491bbeafaf8083688b16841a4240e5"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -1816,22 +1800,11 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rand"
-version = "0.8.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5ca0ecfa931c29007047d1bc58e623ab12e5590e8c7cc53200d5202b69266d8a"
-dependencies = [
- "libc",
- "rand_chacha 0.3.1",
- "rand_core 0.6.4",
-]
-
-[[package]]
-name = "rand"
 version = "0.9.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44c5af06bb1b7d3216d91932aed5265164bf384dc89cd6ba05cf59a35f5f76ea"
 dependencies = [
- "rand_chacha 0.9.0",
+ "rand_chacha",
  "rand_core 0.9.5",
 ]
 
@@ -1848,31 +1821,12 @@ dependencies = [
 
 [[package]]
 name = "rand_chacha"
-version = "0.3.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e6c10a63a0fa32252be49d21e7709d4d4baf8d231c2dbce1eaa8141b9b127d88"
-dependencies = [
- "ppv-lite86",
- "rand_core 0.6.4",
-]
-
-[[package]]
-name = "rand_chacha"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d3022b5f1df60f26e1ffddd6c66e8aa15de382ae63b3a0c1bfc0e4d3e3f325cb"
 dependencies = [
  "ppv-lite86",
  "rand_core 0.9.5",
-]
-
-[[package]]
-name = "rand_core"
-version = "0.6.4"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ec0be4795e2f6a28069bec0b5ff3e2ac9bafc99e6a9a7dc3547996c5c816922c"
-dependencies = [
- "getrandom 0.2.17",
 ]
 
 [[package]]
@@ -2124,7 +2078,7 @@ dependencies = [
  "errno",
  "libc",
  "linux-raw-sys",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2192,7 +2146,7 @@ dependencies = [
  "security-framework",
  "security-framework-sys",
  "webpki-root-certs",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2221,9 +2175,9 @@ checksum = "b39cdef0fa800fc44525c84ccb54a029961a8215f9619753635a9c0d2538d46d"
 
 [[package]]
 name = "s2n-codec"
-version = "0.80.0"
+version = "0.86.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80c081add6c80a35614d55ac1ecac3b0d609de48c7d17c643e9bab0e84e27539"
+checksum = "2f2c33ef4ebeea0bd1fcdd31e3276d63e98ec4775b88d9695f9d6fe415a89842"
 dependencies = [
  "byteorder",
  "bytes",
@@ -2232,15 +2186,13 @@ dependencies = [
 
 [[package]]
 name = "s2n-quic"
-version = "1.80.0"
+version = "1.86.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d1949f3735d6c7003b74c0519afcddf7800bdc14cd65b03930710511802b4032"
+checksum = "ae23e460d91121a2be1c7657715691a4643f36ae39702c219a2f41bb57c337c8"
 dependencies = [
  "bytes",
  "cfg-if",
- "cuckoofilter",
  "futures",
- "hash_hasher",
  "rand 0.10.1",
  "s2n-codec",
  "s2n-quic-core",
@@ -2256,9 +2208,9 @@ dependencies = [
 
 [[package]]
 name = "s2n-quic-core"
-version = "0.80.0"
+version = "0.86.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "bf79f1e410296ae7bf17a0e877d3ce30cb589c73faf6ea31e9ee61aad486197d"
+checksum = "8037d3498dcb9c6a473258328542953001e04d8f81e98163c7c708567dbdc3ad"
 dependencies = [
  "atomic-waker",
  "byteorder",
@@ -2278,9 +2230,9 @@ dependencies = [
 
 [[package]]
 name = "s2n-quic-crypto"
-version = "0.80.0"
+version = "0.86.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a6c42fa0e4a5305121fd0d55662614287283b2d54aeae8adecefe72d8d36b55"
+checksum = "e27dadbcbe234aa315f907f694688f9fb105b3fcb214feea24428b0faaea4b80"
 dependencies = [
  "aws-lc-rs",
  "cfg-if",
@@ -2304,9 +2256,9 @@ dependencies = [
 
 [[package]]
 name = "s2n-quic-platform"
-version = "0.80.0"
+version = "0.86.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a161996e9c20557626704b883f8845d04133c0a27b176d1a1ee401932423d2f2"
+checksum = "1bc6077b6164227a75475c3eacee00600b77fb5d3ae62e393113717e67e97e61"
 dependencies = [
  "cfg-if",
  "futures",
@@ -2319,9 +2271,9 @@ dependencies = [
 
 [[package]]
 name = "s2n-quic-rustls"
-version = "0.80.0"
+version = "0.86.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "68e0dffd40e31fb305e68ab9884a74b1c94949b3e258d02fb6e3a1f1c4305ba0"
+checksum = "ce1839226aef2a5ca6c3fa66eee2df02f715b9ed24a036328fcc39ecbb9014a4"
 dependencies = [
  "bytes",
  "rustls",
@@ -2333,9 +2285,9 @@ dependencies = [
 
 [[package]]
 name = "s2n-quic-transport"
-version = "0.80.0"
+version = "0.86.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2b6c77ed7cf87296886620917ba760ddb1e042446faa7be876887725c89dab63"
+checksum = "c176d5f5c10a17455b1d4a7e7cf28bb965adbcd1bfbe3cbe5f5f3a65c102ed08"
 dependencies = [
  "bytes",
  "futures-channel",
@@ -2546,7 +2498,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
 dependencies = [
  "libc",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -2659,7 +2611,7 @@ dependencies = [
  "getrandom 0.4.2",
  "once_cell",
  "rustix",
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3323,7 +3275,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
 dependencies = [
- "windows-sys 0.61.2",
+ "windows-sys 0.60.2",
 ]
 
 [[package]]
@@ -3852,3 +3804,8 @@ name = "zmij"
 version = "1.0.21"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b8848ee67ecc8aedbaf3e4122217aff892639231befc6a1b58d29fff4c2cabaa"
+
+[[patch.unused]]
+name = "cuckoofilter"
+version = "0.5.0"
+source = "git+https://github.com/axiomhq/rust-cuckoofilter?rev=d493bde0d9e1f4560ad04ead86cbd9c92021ded3#d493bde0d9e1f4560ad04ead86cbd9c92021ded3"
