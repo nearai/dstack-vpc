@@ -19,8 +19,14 @@ if [ -z "$DSTACK_MESH_URL" ]; then
     exit 1
 fi
 
+# Optional access token for the mesh client proxy (sent only when non-empty)
+MESH_AUTH_ARGS=()
+if [ -n "${MESH_CLIENT_PROXY_TOKEN:-}" ]; then
+    MESH_AUTH_ARGS=(-H "x-dstack-mesh-token: $MESH_CLIENT_PROXY_TOKEN")
+fi
+
 log "Fetching instance info from dstack-mesh..."
-INFO=$(curl -s --connect-timeout 10 "$DSTACK_MESH_URL/info" 2>&1) || true
+INFO=$(curl -s --connect-timeout 10 "${MESH_AUTH_ARGS[@]}" "$DSTACK_MESH_URL/info" 2>&1) || true
 
 if [ -z "$INFO" ]; then
     log "ERROR: Could not fetch instance info from $DSTACK_MESH_URL/info"
@@ -62,6 +68,7 @@ while [ $attempt -lt $MAX_RETRIES ]; do
         --max-time 30 \
         -H "x-dstack-target-app: $VPC_SERVER_APP_ID" \
         -H "Host: vpc-server" \
+        "${MESH_AUTH_ARGS[@]}" \
         "$DSTACK_MESH_URL/api/register?instance_id=$INSTANCE_ID&node_name=$ENROLLMENT_NODE_NAME" 2>&1) || true
 
     # Check if we got a valid response

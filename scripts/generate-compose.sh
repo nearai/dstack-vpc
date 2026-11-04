@@ -27,12 +27,12 @@ gen-dstack-mesh() {
       - /var/run/dstack.sock:/var/run/dstack.sock
       - /var/run/docker.sock:/var/run/docker.sock
       - /dstack/.dstack-service:/etc/dstack
-      - vpc_shared:/vpc/0:ro
     privileged: true
     environment:
       - DSTACK_MESH_BACKEND=${DSTACK_MESH_BACKEND}
       - DSTACK_VPC_SERVER_API=${DSTACK_VPC_SERVER_API}
       - DSTACK_VPC_SERVER_NAME=${DSTACK_VPC_SERVER_NAME}
+      - MESH_CLIENT_PROXY_TOKEN=${MESH_CLIENT_PROXY_TOKEN:-}
       - RUST_LOG=error
     networks:
       - project
@@ -97,6 +97,7 @@ EOF
       - GIN_MODE=release
       - VPC_SERVER_CONTAINER_NAME=$VPC_SERVER_CONTAINER_NAME
       - DSTACK_MESH_CONTAINER_NAME=$MESH_CONTAINER_NAME
+      - MESH_CLIENT_PROXY_TOKEN=${MESH_CLIENT_PROXY_TOKEN:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - vpc_api_server_data:/data
@@ -122,6 +123,7 @@ EOF
       - GIN_MODE=release
       - VPC_SERVER_CONTAINER_NAME=$VPC_SERVER_CONTAINER_NAME
       - DSTACK_MESH_CONTAINER_NAME=$MESH_CONTAINER_NAME
+      - MESH_CLIENT_PROXY_TOKEN=${MESH_CLIENT_PROXY_TOKEN:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - vpc_api_server_data:/data
@@ -141,8 +143,7 @@ EOF
     restart: always
     labels:
       com.datadoghq.ad.logs: '[{"source": "nginx", "service": "vpc-api-lb"}]'
-    ports:
-      - "8000:8000"
+    # Reached only on the compose network, by the mesh :443 proxy.
     volumes:
       - /dstack/.dstack-service/nginx-lb.conf:/etc/nginx/nginx.conf:ro
     healthcheck:
@@ -171,6 +172,7 @@ EOF
       - GIN_MODE=release
       - VPC_SERVER_CONTAINER_NAME=$VPC_SERVER_CONTAINER_NAME
       - DSTACK_MESH_CONTAINER_NAME=$MESH_CONTAINER_NAME
+      - MESH_CLIENT_PROXY_TOKEN=${MESH_CLIENT_PROXY_TOKEN:-}
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - vpc_api_server_data:/data
@@ -484,6 +486,7 @@ gen-vpc-client() {
       - NODE_NAME=${DSTACK_VPC_NODE_NAME}
       - VPC_SERVER_APP_ID=${DSTACK_VPC_SERVER_APP_ID}
       - DSTACK_MESH_URL=http://${MESH_CONTAINER_NAME}
+      - MESH_CLIENT_PROXY_TOKEN=${MESH_CLIENT_PROXY_TOKEN:-}
     command: /scripts/vpc-node-setup.sh
     restart: "no"
     volumes:
