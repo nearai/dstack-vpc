@@ -52,6 +52,7 @@ RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt
     echo 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250411T024939Z bookworm main' > /etc/apt/sources.list && \
     echo 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20250411T024939Z bookworm-security main' >> /etc/apt/sources.list && \
     echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/10no-check-valid-until && \
+    printf 'Acquire::Retries "10";\nAcquire::http::Timeout "60";\n' > /etc/apt/apt.conf.d/10retries && \
     rm -rf /etc/apt/sources.list.d/* && \
     mkdir -p /etc/apt/preferences.d && \
     while IFS= read -r line; do \
