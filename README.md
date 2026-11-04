@@ -57,7 +57,7 @@ A Rust-based mTLS proxy that provides two services:
   - Routes requests based on `x-dstack-target-app` and `x-dstack-target-port` headers
   - Performs mTLS connections with RA-TLS certificate verification
   - Non-routed requests are limited to `GET /info` (served from the local `dstack.sock` agent) and `GET /gateway`; other non-routed requests return 403
-  - Optional access token: when `MESH_CLIENT_PROXY_TOKEN` is set, callers must send it in the `x-dstack-mesh-token` header; the header is not forwarded to target apps. When unset or empty, no token is required
+  - Optional access token: when `MESH_CLIENT_PROXY_TOKEN` is set, callers must send it in the `x-dstack-mesh-token` header; the header is not forwarded to target apps. When unset or empty/whitespace-only, no token is required
 
 - **Auth Service (Port 8092)**: Inbound authentication for Nginx
   - Validates client certificates via nginx `auth_request` directive
@@ -127,7 +127,7 @@ Handles TLS termination and routing:
 When Node A wants to call Node B's service:
 
 ```bash
-curl -H "x-dstack-target-app: node-b-app-id" \
+curl -H "x-dstack-target-app: 0123456789abcdef0123456789abcdef01234567" \
      -H "x-dstack-target-port: 27017" \
      http://localhost:80/api/data
 ```
@@ -335,9 +335,9 @@ Response:
 ### Service Mesh Headers
 
 **Outbound Requests** (to other CVMs):
-- `x-dstack-target-app`: Target CVM's app ID (required)
-- `x-dstack-target-port`: Target service port (required)
-- `x-dstack-target-instance`: Target instance UUID (optional)
+- `x-dstack-target-app`: Target CVM's app ID (required; 1-64 hex characters)
+- `x-dstack-target-port`: Target service port (1-65535, defaults to 443 when absent; invalid values get 400)
+- `x-dstack-target-instance`: Target instance UUID (optional; hex characters and `-`, up to 64)
 
 **Inbound Requests** (to your service):
 - `x-dstack-app-id`: Authenticated caller's app ID (set by mesh)

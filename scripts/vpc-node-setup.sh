@@ -19,10 +19,13 @@ if [ -z "$DSTACK_MESH_URL" ]; then
     exit 1
 fi
 
-# Optional access token for the mesh client proxy (sent only when non-empty)
+# Optional access token for the mesh client proxy (trimmed; sent only when non-empty)
+MESH_TOKEN="${MESH_CLIENT_PROXY_TOKEN:-}"
+MESH_TOKEN="${MESH_TOKEN#"${MESH_TOKEN%%[![:space:]]*}"}"
+MESH_TOKEN="${MESH_TOKEN%"${MESH_TOKEN##*[![:space:]]}"}"
 MESH_AUTH_ARGS=()
-if [ -n "${MESH_CLIENT_PROXY_TOKEN:-}" ]; then
-    MESH_AUTH_ARGS=(-H "x-dstack-mesh-token: $MESH_CLIENT_PROXY_TOKEN")
+if [ -n "$MESH_TOKEN" ]; then
+    MESH_AUTH_ARGS=(-H "x-dstack-mesh-token: $MESH_TOKEN")
 fi
 
 log "Fetching instance info from dstack-mesh..."

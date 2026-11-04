@@ -67,7 +67,7 @@ func dstackMeshGet(path string) (*http.Response, error) {
 	if err != nil {
 		return nil, err
 	}
-	if token := os.Getenv("MESH_CLIENT_PROXY_TOKEN"); token != "" {
+	if token := strings.TrimSpace(os.Getenv("MESH_CLIENT_PROXY_TOKEN")); token != "" {
 		req.Header.Set("x-dstack-mesh-token", token)
 	}
 	return http.DefaultClient.Do(req)

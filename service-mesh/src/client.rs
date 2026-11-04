@@ -458,7 +458,7 @@ async fn proxy_request(
     };
 
     // Validate connection target before proceeding
-    validate_connection_target(&target)?;
+    validate_connection_target(request, &target)?;
 
     // Build target URL
     let url = {
@@ -615,20 +615,38 @@ fn create_mtls_client(config: &Config) -> Result<Client> {
     Ok(client)
 }
 
-/// Validate that we should connect to the specified target
-fn validate_connection_target(target: &TargetInfo) -> Result<(), Status> {
-    // Ensure app_id is present and valid
-    if target.app_id.is_empty() {
-        tracing::error!("Target app_id cannot be empty");
-        return Err(Status::BadRequest);
-    }
+/// Maximum length of the app and instance identifiers accepted in target headers
+const MAX_TARGET_ID_LEN: usize = 64;
 
-    // Validate app_id format (should be hex string for dstack)
-    if !target.app_id.chars().all(|c| c.is_ascii_hexdigit()) {
-        warn!(
-            "Target app_id '{}' is not in expected hex format",
-            target.app_id
-        );
+/// Check the raw target header values before they are used to build a URL.
+///
+/// - `app_id`: 1-64 ASCII hex characters
+/// - `instance_id`: empty, or 1-64 ASCII hex characters or `-`
+/// - `port`: a non-zero u16 in decimal
+fn check_target_fields(app_id: &str, instance_id: &str, port: &str) -> Result<(), Status> {
+    let app_ok = (1..=MAX_TARGET_ID_LEN).contains(&app_id.len())
+        && app_id.bytes().all(|c| c.is_ascii_hexdigit());
+    let instance_ok = instance_id.len() <= MAX_TARGET_ID_LEN
+        && instance_id
+            .bytes()
+            .all(|c| c.is_ascii_hexdigit() || c == b'-');
+    let port_ok = port.parse::<u16>().is_ok_and(|p| p != 0);
+    if app_ok && instance_ok && port_ok {
+        Ok(())
+    } else {
+        Err(Status::BadRequest)
+    }
+}
+
+/// Validate that we should connect to the specified target.
+///
+/// The port is checked from the raw header (default 443 when absent) because
+/// `extract_target_info` falls back to 443 for values that do not parse.
+fn validate_connection_target(request: &DstackRequest, target: &TargetInfo) -> Result<(), Status> {
+    let port = request.target_port.as_deref().unwrap_or("443");
+    if let Err(status) = check_target_fields(&target.app_id, &target.instance_id, port) {
+        warn!("Rejected invalid target headers (app_id/instance/port)");
+        return Err(status);
     }
     debug!(
         "Validated mTLS connection target - app_id: {}, port: {}, instance: '{}'",
@@ -719,5 +737,41 @@ mod tests {
         assert!(constant_time_eq(b"", b""));
         assert!(!constant_time_eq(b"secret", b"secreT"));
         assert!(!constant_time_eq(b"secret", b"secre"));
+    }
+
+    #[test]
+    fn accepts_valid_targets() {
+        let app = "a1B2c3D4e5f60718293a4b5c6d7e8f9012345678";
+        let uuid = "123e4567-e89b-12d3-a456-426614174000";
+        assert!(check_target_fields(app, "", "443").is_ok());
+        assert!(check_target_fields(app, uuid, "27017").is_ok());
+        assert!(check_target_fields("a", "-", "1").is_ok());
+        assert!(check_target_fields(&"f".repeat(64), &"-".repeat(64), "65535").is_ok());
+    }
+
+    #[test]
+    fn rejects_bad_app_id() {
+        assert!(check_target_fields("", "", "443").is_err());
+        for c in ["/", "@", "#", ".", ":", " ", "?", "g", "-"] {
+            let bad = format!("ab{c}cd");
+            assert!(check_target_fields(&bad, "", "443").is_err(), "{bad:?}");
+        }
+        assert!(check_target_fields(&"a".repeat(65), "", "443").is_err());
+    }
+
+    #[test]
+    fn rejects_bad_instance_id() {
+        for c in ["/", "@", "#", ".", ":", " ", "?", "g"] {
+            let bad = format!("ab{c}cd");
+            assert!(check_target_fields("ab", &bad, "443").is_err(), "{bad:?}");
+        }
+        assert!(check_target_fields("ab", &"a".repeat(65), "443").is_err());
+    }
+
+    #[test]
+    fn rejects_bad_port() {
+        for p in ["0", "70000", "443s", "", " 443", "-1", "4.43", "65536"] {
+            assert!(check_target_fields("ab", "", p).is_err(), "{p:?}");
+        }
     }
 }
