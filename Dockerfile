@@ -1,3 +1,8 @@
+# PENDING PUBLICATION: locally assembled digest; anonymous pull is not verified.
+FROM nearaidev/apt-bundle-dstack-vpc@sha256:69e94c621c7c320a2592d861adcdd049b793a9da523aa51a0f57c8bd46576059 AS apt-bundle
+FROM scratch AS apt-bundle-files
+COPY --from=apt-bundle /apt-bundle /apt-bundle
+
 FROM rust:1.88-alpine@sha256:9dfaae478ecd298b6b5a039e1f2cc4fc040fc818a2de9aa78fa714dea036574d AS rust-builder
 RUN apk add --no-cache musl-dev=1.2.5-r13
 RUN rustup target add x86_64-unknown-linux-musl
@@ -32,46 +37,26 @@ RUN ./extract-modules.sh
 
 FROM debian:bookworm-slim@sha256:78d2f66e0fec9e5a39fb2c72ea5e052b548df75602b5215ed01a17171529f706 AS runtime
 
-# Install all apt packages (Debian snapshot + Docker apt repo) in one layer,
-# version-pinned via pinned-packages.txt for reproducibility.
-#
-# Step 1 sets up the Debian snapshot via HTTP. The base image (debian-slim)
-# ships no ca-certificates, so HTTPS is impossible at this point. Apt verifies
-# repo signatures locally with debian-archive-keyring, so HTTP is safe.
-# Step 2 bootstraps ca-certificates + curl from the snapshot (now pinned).
-# Step 3 adds Docker's apt repo (HTTPS works now that ca-certificates is in).
-# Step 4 installs all remaining packages, including docker-ce* (versions in
-# pinned-packages.txt enforced via Pin-Priority 1001).
-#
-# The previous version ran `curl https://get.docker.com | sh`, which pulled
-# whatever Docker version was current at build time — a drift source and a
-# supply-chain risk.
-RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt,ro \
+# Install all apt packages offline from signed Debian and Docker repositories.
+# Package pins remain authoritative. The helper and Docker signing key are
+# reviewed source inputs, independent of the bundle's package data.
+RUN --network=none \
+    --mount=type=bind,from=apt-bundle-files,source=/apt-bundle,target=/opt/apt-bundle,ro \
+    --mount=type=bind,source=build/apt-bundle/prepare-apt.sh,target=/run/prepare-apt.sh,ro \
+    --mount=type=bind,source=build/apt-bundle/docker.asc,target=/run/docker.asc,ro \
+    --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt,ro \
     set -e; \
-    # 1. Configure pinned Debian snapshot (HTTP for now, no ca-certificates yet).
-    echo 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian/20250411T024939Z bookworm main' > /etc/apt/sources.list && \
-    echo 'deb [check-valid-until=no] http://snapshot.debian.org/archive/debian-security/20250411T024939Z bookworm-security main' >> /etc/apt/sources.list && \
-    echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/10no-check-valid-until && \
-    printf 'Acquire::Retries "10";\nAcquire::http::Timeout "60";\n' > /etc/apt/apt.conf.d/10retries && \
-    rm -rf /etc/apt/sources.list.d/* && \
-    mkdir -p /etc/apt/preferences.d && \
-    while IFS= read -r line; do \
-        pkg=$(echo "$line" | cut -d= -f1); \
-        ver=$(echo "$line" | cut -d= -f2-); \
-        if [ -n "$pkg" ] && [ -n "$ver" ] && [ "$pkg" != "$ver" ]; then \
-            printf "Package: %s\nPin: version %s\nPin-Priority: 1001\n\n" "$pkg" "$ver" >> /etc/apt/preferences.d/pinned-packages; \
-        fi; \
-    done < /tmp/pinned-packages.txt && \
-    apt-get update && \
-    # 2. Bootstrap ca-certificates and curl from the pinned snapshot.
+    bash /run/prepare-apt.sh --bundle /opt/apt-bundle \
+        --snapshot 20250411T024939Z --config /tmp/apt-bundle.conf \
+        --debian-keyring /usr/share/keyrings/debian-archive-keyring.gpg \
+        --status /var/lib/dpkg/status --pins /tmp/pinned-packages.txt \
+        --docker-keyring /run/docker.asc && \
+    if [ -f /var/lib/apt/extended_states ]; then \
+        cp /var/lib/apt/extended_states /tmp/apt-bundle.conf.d/state/extended_states; \
+    fi && \
+    export APT_CONFIG=/tmp/apt-bundle.conf && \
+    apt-get update --error-on=any && \
     apt-get install -y --no-install-recommends ca-certificates curl && \
-    # 3. Add Docker's apt repo (now that HTTPS works).
-    install -m 0755 -d /etc/apt/keyrings && \
-    curl -fsSL https://download.docker.com/linux/debian/gpg -o /etc/apt/keyrings/docker.asc && \
-    chmod a+r /etc/apt/keyrings/docker.asc && \
-    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list && \
-    apt-get update && \
-    # 4. Install all remaining packages, including pinned docker-ce*.
     apt-get install -y --no-install-recommends \
         wget \
         jq \
@@ -88,7 +73,9 @@ RUN --mount=type=bind,source=pinned-packages.txt,target=/tmp/pinned-packages.txt
         docker-buildx-plugin \
         docker-compose-plugin && \
     usermod -aG docker root && \
-    rm -rf /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache && \
+    cp /tmp/apt-bundle.conf.d/state/extended_states /var/lib/apt/extended_states && \
+    rm -rf /tmp/apt-bundle.conf /tmp/apt-bundle.conf.d \
+        /var/lib/apt/lists/* /var/log/* /var/cache/ldconfig/aux-cache && \
     # 5. Reproducibility: etcd-server's postinst creates the `etcd` system user,
     #    and useradd stamps /etc/shadow field 3 (days-since-epoch of the last
     #    password change) with the build date — so this layer, and the whole
