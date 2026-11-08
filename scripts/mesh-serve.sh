@@ -34,15 +34,19 @@ echo "Using URL: $CERT_URL"
 echo "Using container image ID: $DSTACK_CONTAINER_IMAGE_ID"
 echo "Using gateway domain: $DSTACK_GATEWAY_DOMAIN"
 
-if ! docker run --rm --name dstack-get-tls-key -v /var/run/dstack.sock:/var/run/dstack.sock $DSTACK_CONTAINER_IMAGE_ID \
+# The response holds the TLS private key. --log-driver none keeps the helper
+# container's stdout out of the Docker log files that log collectors read;
+# the attached stream still reaches the redirect below.
+if ! docker run --rm --log-driver none --name dstack-get-tls-key -v /var/run/dstack.sock:/var/run/dstack.sock $DSTACK_CONTAINER_IMAGE_ID \
     curl -s --unix-socket /var/run/dstack.sock $CERT_URL >/tmp/server_response.json;
 then
     echo "Failed to generate certificates - dstack.sock may not be available"
     # Debug output
     echo "Debug info - attempting to query dstack.sock directly:"
     curl -s --unix-socket /var/run/dstack.sock http://localhost/Info
-    echo "Contents of /tmp/server_response.json:"
-    cat /tmp/server_response.json
+    # Never print the response itself: it may contain the private key.
+    echo "Response size: $(wc -c </tmp/server_response.json 2>/dev/null || echo 0) bytes"
+    rm -f /tmp/server_response.json
     exit 1
 fi
 
