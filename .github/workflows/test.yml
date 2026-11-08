@@ -35,7 +35,7 @@ jobs:
       - name: Test node-name derivation
         run: bash scripts/test-node-name.sh
 
-      - name: Test generated compose omits proxy token
+      - name: Test generated compose omits secrets
         run: bash scripts/test-compose-token.sh
 
       - name: Check shell syntax

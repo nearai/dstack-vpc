@@ -1,8 +1,9 @@
 #!/bin/bash
 set -euo pipefail
 
-# The mesh client proxy token must reach containers through compose variable
-# substitution at deploy time, never as a literal in the generated compose file.
+# Secrets (the mesh client proxy token, the S3 credentials) must reach
+# containers through compose variable substitution at deploy time, never as
+# literals in the generated compose file: auto-entry.sh prints that file.
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 WORK_DIR=$(mktemp -d)
@@ -22,6 +23,9 @@ generate() {
         DSTACK_VPC_HA_MODE="$ha_mode" \
         DSTACK_VPC_NODE_NAME="test-node" \
         MESH_CLIENT_PROXY_TOKEN="SECRETVAL" \
+        LITESTREAM_S3_BUCKET="test-bucket" \
+        AWS_ACCESS_KEY_ID="AKIDVAL" \
+        AWS_SECRET_ACCESS_KEY="S3KEYVAL" \
         bash "$WORK_DIR/generate-compose.sh"
 }
 
@@ -32,13 +36,23 @@ check_mode() {
     local output
     output=$(generate "$server_enabled" "$ha_mode")
 
-    if grep -q "SECRETVAL" <<<"$output"; then
-        echo "FAIL: $description: token value leaked into generated compose" >&2
-        exit 1
-    fi
+    for value in SECRETVAL AKIDVAL S3KEYVAL; do
+        if grep -q "$value" <<<"$output"; then
+            echo "FAIL: $description: secret value $value leaked into generated compose" >&2
+            exit 1
+        fi
+    done
     if ! grep -qF -- '${MESH_CLIENT_PROXY_TOKEN:-}' <<<"$output"; then
         echo "FAIL: $description: compose does not reference \${MESH_CLIENT_PROXY_TOKEN:-}" >&2
         exit 1
+    fi
+    if [ "$server_enabled" = "true" ]; then
+        for name in AWS_ACCESS_KEY_ID AWS_SECRET_ACCESS_KEY; do
+            if ! grep -qF -- "$name=\${$name:-}" <<<"$output"; then
+                echo "FAIL: $description: compose does not reference \${$name:-}" >&2
+                exit 1
+            fi
+        done
     fi
 }
 
@@ -46,4 +60,4 @@ check_mode "non-HA server" true false
 check_mode "HA server" true true
 check_mode "client only" false false
 
-echo "PASS: generated compose keeps the client proxy token out"
+echo "PASS: generated compose keeps the proxy token and S3 credentials out"
