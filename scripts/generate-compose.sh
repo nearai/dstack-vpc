@@ -210,8 +210,8 @@ gen-litestream-restore() {
     environment:
       - LITESTREAM_S3_BUCKET=$LITESTREAM_S3_BUCKET
       - LITESTREAM_S3_PATH=$LITESTREAM_S3_PATH
-      - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-      - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+      - AWS_ACCESS_KEY_ID=\${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=\${AWS_SECRET_ACCESS_KEY:-}
       - AWS_REGION=$AWS_REGION
     volumes:
       - vpc_server_data:/var/lib/headscale
@@ -241,8 +241,8 @@ gen-litestream() {
     environment:
       - LITESTREAM_S3_BUCKET=$LITESTREAM_S3_BUCKET
       - LITESTREAM_S3_PATH=$LITESTREAM_S3_PATH
-      - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-      - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+      - AWS_ACCESS_KEY_ID=\${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=\${AWS_SECRET_ACCESS_KEY:-}
       - AWS_REGION=$AWS_REGION
     volumes:
       - vpc_server_data:/var/lib/headscale
@@ -330,8 +330,8 @@ ENCRYPT_SCRIPT
     labels:
       com.datadoghq.ad.logs: '[{"source": "noise-key-upload", "service": "noise-key-upload"}]'
     environment:
-      - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-      - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+      - AWS_ACCESS_KEY_ID=\${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=\${AWS_SECRET_ACCESS_KEY:-}
       - AWS_REGION=$AWS_REGION
     volumes:
       - vpc_server_data:/var/lib/headscale:ro
@@ -440,8 +440,8 @@ ENCRYPT_SCRIPT
     labels:
       com.datadoghq.ad.logs: '[{"source": "shared-key-upload", "service": "shared-key-upload"}]'
     environment:
-      - AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID
-      - AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY
+      - AWS_ACCESS_KEY_ID=\${AWS_ACCESS_KEY_ID:-}
+      - AWS_SECRET_ACCESS_KEY=\${AWS_SECRET_ACCESS_KEY:-}
       - AWS_REGION=$AWS_REGION
     volumes:
       - vpc_api_server_data:/data:ro
